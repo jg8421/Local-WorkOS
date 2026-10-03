@@ -212,7 +212,7 @@ class ModelSelectionHttpTests(unittest.TestCase):
         self.transport('MUST NOT CALL');store=self.app.stores['personal']
         meeting=store.create('meetings',{'title':'Synthetic protected original',
             'project_id':self.projects['personal']['id'],'transcript':'Original synthetic transcript','summary':'Original saved summary'})
-        before=store.backup('personal');history=self.app.conversations.backup('personal')
+        before=store.backup('personal')['data'];history=self.app.conversations.backup('personal')
         for surface in ('ask','valuation','meeting','actions','workflow'):
             for changes in ({'mode':'deepseek','model_id':'gpt-6-sol'},
                 {'mode':'model','provider':'model','model_id':'unconfigured-custom'},
@@ -225,7 +225,7 @@ class ModelSelectionHttpTests(unittest.TestCase):
                     code,result=self.post(surface,body)
                     self.assertEqual(code,400,result)
         self.assertEqual(self.calls,[])
-        self.assertEqual(store.backup('personal'),before)
+        self.assertEqual(store.backup('personal')['data'],before)
         self.assertEqual(self.app.conversations.backup('personal'),history)
 
 

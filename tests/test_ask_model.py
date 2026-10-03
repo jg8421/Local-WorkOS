@@ -150,7 +150,11 @@ class AskModelHttpTests(unittest.TestCase):
         for ids,workspace in (([foreign['id']],'personal'),([memory['id']],'personal'),
                               ([selected['id'],memory['id']],'personal'),([selected['id']],'demo'),([], 'personal')):
             status,result = self.request('POST','/api/ask',{**body,'document_ids':ids},workspace=workspace)
-            self.assertEqual(status,400,result)
+            if not ids:
+                self.assertEqual(status,200,result)
+                self.assertEqual(result.get('status'),'needs_input',result)
+                self.assertTrue(result.get('questions'),result)
+            else:self.assertEqual(status,400,result)
         self.model.assert_not_called()
 
     def test_large_fallback_is_bounded_and_covers_late_selected_sources(self):

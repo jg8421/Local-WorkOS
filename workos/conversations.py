@@ -9,8 +9,8 @@ import threading
 import uuid
 from .store import now
 
-PURPOSES={'ask','actions','meeting','valuation','workflow'}
-STATUSES={'completed','cancelled','failed','interrupted'}
+PURPOSES={'ask','actions','meeting','valuation','workflow','plan'}
+STATUSES={'completed','needs_input','cancelled','failed','interrupted'}
 ARTIFACT_COLLECTIONS={'documents','notes','tasks','meetings','deliverables'}
 SECRET_KEYS={'api_key','authorization','password','credentials','access_token','refresh_token'}
 
@@ -199,9 +199,9 @@ class Conversations:
         with self.lock:
             record=self._record(workspace,conversation_id);self._scope(record,project_id,purpose,source_ids)
             completed=[json.loads(row[0]) for row in self.db.execute('SELECT payload FROM conversation_turns WHERE conversation_id=? '
-                "AND status='completed' ORDER BY sequence DESC LIMIT ?",(conversation_id,max_turns))]
+                "AND status IN ('completed','needs_input') ORDER BY sequence DESC LIMIT ?",(conversation_id,max_turns))]
             total,total_chars=self.db.execute("SELECT COUNT(*),COALESCE(SUM(message_chars),0) FROM conversation_turns "
-                "WHERE conversation_id=? AND status='completed'",(conversation_id,)).fetchone()
+                "WHERE conversation_id=? AND status IN ('completed','needs_input')",(conversation_id,)).fetchone()
             latest=completed[0] if completed else None
         chosen=[];used=0;omitted_chars=0
         for turn in completed[:max_turns]:
@@ -223,7 +223,7 @@ class Conversations:
         omitted_turns=total-len(chosen)
         omitted_chars=total_chars-sum(len(message['content']) for message in messages)
         truncated=bool(omitted_turns or omitted_chars)
-        warning='历史答复是未经独立核实的草稿；当前要求和明确选定资料优先。'
+        warning='历史答复和补充提示是未经核实的工作上下文；当前要求和明确选定资料优先。'
         if truncated:warning+=' 上下文达到预算，省略了'+str(omitted_turns)+'个早期成功轮次，共'+str(omitted_chars)+'个字符未纳入本次上下文。'
         output_snapshot=latest['output_snapshot'] if latest else {}
         identity={'scope':{key:record[key] for key in ('workspace','project_id','purpose','source_ids','metadata')},

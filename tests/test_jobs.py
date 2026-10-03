@@ -84,6 +84,27 @@ class WorkflowJobTests(unittest.TestCase):
         self.app.local_chat.side_effect = generate
         return entered, release
 
+    def test_worker_clarification_is_durable_waiting_with_no_empty_deliverable(self):
+        from workos.clarifications import ClarificationRequired, needs_input
+        report = needs_input('需要确认来源。', [{'id':'source','label':'请补充所需的来源。'}],purpose='workflow')
+        jobs = self.manager()
+        with patch('workos.workflows.run_workflow',side_effect=ClarificationRequired(report)):
+            submitted = jobs.submit('real',self.request())
+            state = self.finished(jobs,'real',submitted['id'])
+        self.assertEqual(state['status'],'needs_input',state)
+        self.assertEqual(state['result'],report)
+        self.assertFalse(state['retryable'])
+        self.assertEqual(state['error'],'')
+        self.assertTrue(state['finished_at'])
+        self.assertEqual(state['eta']['max_seconds'],0)
+        self.assertEqual(state['stage_label'],'等待你补充信息')
+        self.assertEqual(self.stores['real'].list('deliverables'),[])
+        self.assertNotIn(submitted['id'],jobs.tokens)
+        jobs.close()
+        restored=self.manager()
+        self.assertEqual(restored.get('real',submitted['id'])['status'],'needs_input')
+        self.assertEqual(restored.get('real',submitted['id'])['result'],report)
+
     def test_concurrent_repeat_requests_save_once_and_workspaces_are_isolated(self):
         jobs = self.manager(workers=2)
         entered, release = self.blocking_model()

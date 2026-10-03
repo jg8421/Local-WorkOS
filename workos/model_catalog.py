@@ -74,7 +74,7 @@ UNSUPPORTED_MODELS = {
 
 
 def _model_id(value):
-    if not isinstance(value, str) or not MODEL_ID.fullmatch(value):
+    if not isinstance(value, str) or not MODEL_ID.fullmatch(value) or '://' in value:
         raise ValueError('模型编号格式无效')
     return value
 
@@ -82,6 +82,7 @@ def _model_id(value):
 def _mode(value):
     if value is None or value == '':
         return None
+    if isinstance(value,str) and re.fullmatch(r'custom-[a-f0-9]{16}',value):return value
     if not isinstance(value, str) or value not in ALIASES:
         raise ValueError('请选择有效的模型服务')
     return ALIASES[value]
@@ -133,6 +134,9 @@ def _infer_mode(model_id, config):
             return mode
     if model_id and model_id == config.get('model'):
         return 'model'
+    registered=[item for item in config.get('registered_models') or [] if isinstance(item,dict) and item.get('model_id')==model_id]
+    if len(registered)==1:return registered[0].get('mode')
+    if len(registered)>1:raise ValueError('这个模型编号存在多个连接，请从分组列表明确选择')
     raise ValueError('所选模型不在允许列表中')
 
 
@@ -156,6 +160,14 @@ def resolve_selection(body, config=None, *, default_mode='deepseek', allow_local
         if model_id:
             raise ValueError('本地规则模式不能同时指定 AI 模型')
         return {'mode': 'local', 'provider': 'local', 'model_id': '', 'name': '本地规则', 'base_url': '', 'context': None}
+    if isinstance(mode,str) and mode.startswith('custom-'):
+        entries=config.get('registered_models') or []
+        entry=next((item for item in entries if isinstance(item,dict) and item.get('mode')==mode),None)
+        if entry is None:raise ValueError('该模型连接已移除，请选择当前列表中的模型')
+        configured_model=_model_id(entry.get('model_id'))
+        if model_id and model_id!=configured_model:raise ValueError('所选模型与已登记连接不同；没有自动切换模型')
+        return {'mode':mode,'provider':mode,'model_id':configured_model,'name':entry.get('name') or configured_model,
+                'base_url':endpoint_url(entry.get('base_url')),'context':None}
     if mode not in MODES:
         raise ValueError('请选择可用的 AI 模型服务')
     if mode!='model' and model_id in UNSUPPORTED_MODELS:
@@ -250,4 +262,9 @@ def build_catalog(config=None, *, dsh_available=False, bridge_model_ids=None, mo
         try:choice=resolve_selection({'mode':'model'},config)
         except ValueError:choice=None
         if choice:add('model','已配置兼容接口','model',choice['model_id'],choice['name'])
+    for entry in config.get('registered_models') or []:
+        if not isinstance(entry,dict):continue
+        try:choice=resolve_selection({'mode':entry.get('mode')},config)
+        except ValueError:continue
+        add(choice['mode'],entry.get('provider_label') or '自定义模型',choice['mode'],choice['model_id'],choice['name'])
     return {'groups':groups,'default_selection_id':'deepseek:'+LOCAL_DEFAULT_MODEL}

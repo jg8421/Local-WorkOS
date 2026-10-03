@@ -83,22 +83,21 @@
   let workflowPollTimer = null;
   const views = new Map();
   function freshView() {
-    const ask=loadModelChoice('ask',{mode:loadLocalModel().startsWith('deepseek-')?'deepseek':'local-models',id:loadLocalModel()}),agent=loadModelChoice('agent',{mode:'deepseek',id:'deepseek-v4.1-flash'}),meeting=loadModelChoice('meeting',{mode:'deepseek',id:'deepseek-v4.1-flash'}),valuation=loadModelChoice('valuation',legacyValuationChoice()),start=loadModelChoice('start',{mode:'deepseek',id:'deepseek-v4.1-flash'});
+    const defaultModel={mode:'deepseek',id:'deepseek-v4.1-flash'},ask=loadModelChoice('ask',defaultModel),agent=loadModelChoice('agent',defaultModel),meeting=loadModelChoice('meeting',defaultModel),valuation=loadModelChoice('valuation',defaultModel),start=loadModelChoice('start',defaultModel);
     return { page: 'overview', startMessage: '', startProject: '', startPurpose: '', startMode:start.mode,startModel:start.id,startSourceIds: new Set(), startBusy: false, workflowKey: 'brief', workflowMessage: '', workflowBusy: false, workflowError: '', workflowResults: [], projectStage: '全部', projectQuery: '', projectId: '', libraryQuery: '', libraryGroup: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceGroup: '', sourceQuery: '', selectedSources: new Set(), answers: [], researchIntent: 'ask', askMode:ask.mode,dshModel:ask.mode==='dsh'?ask.id:loadDshModel(),localModel:ask.mode==='dsh'?loadLocalModel():ask.id,agentMode:agent.mode,agentModel:agent.id,agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentResultProject: null, agentProjectScope: true, agentHistoryByScope: new Map(), question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), meetingTranscriptDraft: '', meetingMode:meeting.mode,meetingModel:meeting.id,meetingAiBusy: false, meetingSaveTimer: null, meetingSaveState: '', memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '',valuationMode:valuation.mode,valuationModel:valuation.id };
   }
   function view() {
     if (!views.has(app.workspace)) {
       const state = freshView();
       const checker=loadModelChoice('model-check',{mode:'deepseek',id:'deepseek-v4.1-flash'});state['model-checkMode']=checker.mode;state['model-checkModel']=checker.id;
-      Object.assign(state, {workflowQuality:'',workflowJobs:[],workflowJobConnectionError:'',workflowPollFailures:0,workflowPollBusy:false,workflowSeenCompletions:new Set(),workflowRetryBusy:new Set(),workflowStopBusy:new Set(),workflowStopErrors:new Map(),aiRuns:new Map(),aiKinds:new Map(),aiReports:new Map(),conversations:new Map(),conversationLists:new Map(),conversationLoading:new Set(),projectArchives:new Map(),archiveLoading:new Set(),meetingInstructions:new Map(),meetingTranscriptDrafts:new Map()});
+      Object.assign(state, {workflowQuality:'',workflowJobs:[],workflowJobConnectionError:'',workflowPollFailures:0,workflowPollBusy:false,workflowSeenCompletions:new Set(),workflowRetryBusy:new Set(),workflowStopBusy:new Set(),workflowStopErrors:new Map(),aiRuns:new Map(),aiKinds:new Map(),aiReports:new Map(),conversations:new Map(),conversationLists:new Map(),conversationLoading:new Set(),clarifications:new Map(),projectArchives:new Map(),archiveLoading:new Set(),meetingInstructions:new Map(),meetingTranscriptDrafts:new Map()});
       views.set(app.workspace, state);
     }
     return views.get(app.workspace);
   }
   function loadDshModel() { try { const model = localStorage.getItem('local-workos:dsh-model'); return DSH_MODEL_IDS.has(model) ? model : 'gpt-6-luna'; } catch { return 'gpt-6-luna'; } }
   function loadLocalModel() { try { const model = localStorage.getItem('local-workos:local-model'); return LOCAL_MODEL_IDS.has(model) ? model : 'deepseek-v4.1-flash'; } catch { return 'deepseek-v4.1-flash'; } }
-  function loadModelChoice(kind,fallback){try{const saved=localStorage.getItem(`local-workos:model-choice:${kind}`),choice=saved?parseModelChoice(saved):fallback;return ['deepseek','local-models','dsh','model','local','rules'].includes(choice.mode)?choice:fallback;}catch{return fallback;}}
-  function legacyValuationChoice(){try{if(localStorage.getItem('local-workos:dsh-model'))return {mode:'dsh',id:loadDshModel()};}catch{/* Optional preference. */}return {mode:'deepseek',id:'deepseek-v4.1-flash'};}
+  function loadModelChoice(kind,fallback){try{const saved=localStorage.getItem(`local-workos:model-choice:${kind}`),choice=saved?parseModelChoice(saved):fallback;return ['deepseek','local-models','dsh','model','local','rules'].includes(choice.mode)||/^custom-[a-f0-9]{16}$/.test(choice.mode)?choice:fallback;}catch{return fallback;}}
   function loadFinance() {
     try { const value = JSON.parse(localStorage.getItem(`local-workos:${app.workspace}:assumptions`) || 'null'); return { ...FINANCE_DEFAULTS, ...(value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key, number]) => key in FINANCE_DEFAULTS && Number.isFinite(number))) : {}) }; }
     catch { return { ...FINANCE_DEFAULTS }; }
@@ -127,16 +126,16 @@
   const modelSelectionId=choice=>`${choice.mode}:${choice.id||''}`;
   function selectedModel(kind,state=view()){const choice=modelSelection(kind,state);return catalogModels().find(model=>model.selection_id===modelSelectionId(choice)||model.mode===choice.mode&&model.id===choice.id);}
   function modelAvailable(kind,state=view()){const choice=modelSelection(kind,state);return choice.mode==='local'||choice.mode==='rules'||selectedModel(kind,state)?.available===true;}
-  const modelStatusLabel=status=>({not_checked:'待验证连接',unknown:'待验证连接',advertised:'已发现 · 待验证连接',available:'可用',verified:'已验证',unavailable:'暂不可用',rejected:'连接未通过',runtime_unavailable:'本机连接不可用',unsupported:'当前入口不支持',not_installed:'未安装',missing:'未找到模型',unconfigured:'未配置',failed:'连接未通过',offline:'未连接'}[status]||status||'暂不可用');
+  const modelStatusLabel=status=>({not_checked:'待验证连接',unknown:'待验证连接',advertised:'已发现 · 待验证连接',configured:'已配置 · 待验证连接',available:'可用',verified:'已验证',unavailable:'暂不可用',rejected:'连接未通过',runtime_unavailable:'本机连接不可用',unsupported:'当前入口不支持',not_installed:'未安装',missing:'未找到模型',unconfigured:'未配置',failed:'连接未通过',offline:'未连接'}[status]||'暂不可用');
   function unifiedModelOptions(kind,{allowLocal=false,allowRules=false}={}){
     const selected=modelSelectionId(modelSelection(kind)),models=catalogModels();
-    let html=modelGroups().map(group=>`<optgroup label="${esc(group.label)}">${(group.models||[]).map(model=>`<option value="${esc(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}))}"${selectedAttr(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}),selected)} ${model.available||kind==='model-check'&&['unavailable','rejected'].includes(model.status)?'':'disabled'}>${esc(model.name)}${model.available?['not_checked','unknown','advertised'].includes(model.status)?' · 待验证':'':' · '+esc(model.reason||modelStatusLabel(model.status))}</option>`).join('')}</optgroup>`).join('');
+    let html=modelGroups().map(group=>`<optgroup label="${esc(group.label)}">${(group.models||[]).map(model=>`<option value="${esc(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}))}"${selectedAttr(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}),selected)} ${model.available||kind==='model-check'&&['unavailable','rejected'].includes(model.status)?'':'disabled'}>${esc(model.name)}${model.available?['not_checked','unknown','advertised','configured'].includes(model.status)?' · 待验证':'':' · '+esc(model.reason||modelStatusLabel(model.status))}</option>`).join('')}</optgroup>`).join('');
     const nonAi=[];if(allowLocal)nonAi.push(['local:','仅找原文 · 不调用AI']);if(allowRules)nonAi.push(['rules:','按规则整理 · 不调用AI']);
     if(nonAi.length)html+=`<optgroup label="本机工具 · 不调用AI">${nonAi.map(([value,label])=>`<option value="${value}"${selectedAttr(value,selected)}>${esc(label)}</option>`).join('')}</optgroup>`;
     if(!models.some(model=>(model.selection_id||modelSelectionId({mode:model.mode,id:model.id}))===selected)&&!nonAi.some(([value])=>value===selected))html+=`<optgroup label="当前选择"><option value="${esc(selected)}" selected disabled>${esc(modelSelection(kind).id||'选择模型')} · 尚不可用，请选择其他模型</option></optgroup>`;
     return html;
   }
-  function setModelSelection(kind,value,{persist=true}={}){const state=view(),choice=parseModelChoice(value);if(kind==='ask'||kind==='workflow'){state.askMode=choice.mode;if(choice.mode==='dsh')state.dshModel=choice.id;else if(choice.mode!=='local')state.localModel=choice.id;if(choice.mode!=='local')state.researchAiChoice=modelSelectionId(choice);state.workflowRequest=null;}else{state[`${kind}Mode`]=choice.mode;state[`${kind}Model`]=choice.id;}if(persist)try{localStorage.setItem(`local-workos:model-choice:${kind==='workflow'?'ask':kind}`,modelSelectionId(choice));}catch{/* Optional preference. */}}
+  function setModelSelection(kind,value,{persist=true}={}){const state=view(),choice=parseModelChoice(value);if(kind==='ask'||kind==='workflow'){state.askMode=choice.mode;if(choice.mode==='local')state.askAnswerScope='';if(choice.mode==='dsh')state.dshModel=choice.id;else if(choice.mode!=='local')state.localModel=choice.id;if(choice.mode!=='local')state.researchAiChoice=modelSelectionId(choice);state.workflowRequest=null;}else{state[`${kind}Mode`]=choice.mode;state[`${kind}Model`]=choice.id;}if(persist)try{localStorage.setItem(`local-workos:model-choice:${kind==='workflow'?'ask':kind}`,modelSelectionId(choice));}catch{/* Optional preference. */}}
   function restoreResearchModel(){const state=view();setModelSelection('ask',state.researchAiChoice||'deepseek:deepseek-v4.1-flash',{persist:false});}
   function modelStatus(kind){const choice=modelSelection(kind);if(choice.mode==='local')return banner('只找原文 · 不调用 AI','仅在本机按关键词查找原文，不解释或推理。需要解释时请从同一下拉框选择模型。','amber','search');if(choice.mode==='rules')return banner('按规则整理 · 不调用 AI','仅按本机规则生成可编辑草稿，不调用大模型。','amber','info');const model=selectedModel(kind),available=model?.available===true,status=modelStatusLabel(model?.status);return banner(model?.name||choice.id||'请选择模型',available?`当前连接${['not_checked','unknown'].includes(model.status)?'待验证':'状态：'+status}。提交时使用本次资料和对话范围。`:`${model?.reason||status}。${kind==='model-check'?'可重新检测此模型，或选择其他模型。':'请在下拉框选择其他模型，或到设置检测连接。'}`,available?'blue':'amber',available?'external':'warning');}
   function requireModel(kind){if(modelAvailable(kind))return true;notify('当前模型不可用，请从下拉框选择可用模型。',true);return false;}
@@ -210,7 +209,7 @@
     try {const response=await api(`/operations/${encodeURIComponent(run.id)}`);if(response.operation){run.progress=response.operation;run.progressReceivedAt=Date.now();run.progressConnectionError='';}}
     catch(error){if(error.name==='StaleRequestError'){clearAiTimers(run);return;}run.progressConnectionError='执行状态暂时无法查询，正在重新连接。';}
     if(run.stopped||run.state.aiKinds.get(run.kind)!==run)return;
-    if(run.recovered&&['completed','cancelled','failed','interrupted'].includes(run.progress?.status)){await finishRecoveredRun(run);return;}
+    if(run.recovered&&['completed','cancelled','failed','interrupted','needs_input'].includes(run.progress?.status)){await finishRecoveredRun(run);return;}
     updateAiProgressRegions();run.pollTimer=setTimeout(()=>pollAiProgress(run),1500);
   }
   async function restoreAiOperations() {
@@ -219,7 +218,7 @@
   }
   async function finishRecoveredRun(run) {
     clearAiTimers(run);const state=run.state;
-    try{const id=run.progress?.conversation_id;if(id){const response=await api(`/conversations/${encodeURIComponent(id)}`);if(view()!==state)return;const conversation=response.conversation,kind=run.kind==='agent'?'agent':run.kind;if(conversation&&kind!=='start'&&conversationMatches(conversation,conversationScope(kind))){const scope=conversationScope(kind);state.conversations.set(scope.key,conversation);state.conversationLists.delete(scope.key);}}if(run.progress?.status==='completed')await refreshData();}
+    try{const id=run.progress?.conversation_id;if(id){const response=await api(`/conversations/${encodeURIComponent(id)}`);if(view()!==state)return;const conversation=response.conversation,kind=run.kind==='agent'?'agent':run.kind;if(conversation&&conversationMatches(conversation,conversationScope(kind))){const scope=conversationScope(kind);state.conversations.set(scope.key,conversation);state.conversationLists.delete(scope.key);const turn=[...(conversation.turns||[])].reverse().find(item=>['completed','needs_input'].includes(item.status));if(turn?.output_snapshot?.status==='needs_input'){const draft=composerDraft(kind,state);needsInput(kind,turn.output_snapshot,turn.user_message||'');if(draft&&draft!==turn.user_message)clarification(kind,state).draft=draft;}}}if(run.progress?.status==='completed')await refreshData();}
     catch(error){showError(error);}finally{if(state.aiKinds.get(run.kind)===run){state.aiKinds.delete(run.kind);state[AI_BUSY[run.kind]]=false;}state.aiRuns.delete(run.id);state.aiReports.set(run.kind,run);if(view()===state){const active=document.activeElement,focusId=active?.id,start=active?.selectionStart,end=active?.selectionEnd;if(app.page==='meetings')captureMeetingDraft();render();const input=focusId&&document.getElementById(focusId);if(input){input.focus({preventScroll:true});if(start!=null&&input.setSelectionRange)input.setSelectionRange(start,end);}}}
   }
   const durationLabel=seconds=>{const n=Math.max(0,Math.floor(Number(seconds)||0));return n<60?`${n}秒`:`${Math.floor(n/60)}分${n%60}秒`;};
@@ -230,7 +229,7 @@
     const pct=Number(progress?.progress_percent),known=progress?.progress_percent!=null&&Number.isFinite(pct);
     const stage=progress?.stage_label||progress?.label||(active?'正在准备请求':'本次工作已结束');
     const status=progress?.status||'';
-    return `<div class="ai-progress${compact?' compact':''}" data-progress-status="${esc(status)}"><div class="row wrap between"><strong>${esc(stage)}</strong><span class="small muted">已用 ${durationLabel(elapsed/1000)}${active?hasEta?` · 预计还需 ${durationLabel(low)}–${durationLabel(high)}`:' · 剩余时间暂无法估计':''}</span></div>${active?`<div class="ai-progress-track${known?'':' indeterminate'}" role="progressbar" aria-label="${known?'已完成步骤比例':'等待模型或服务返回'}" ${known?`aria-valuenow="${Math.max(0,Math.min(100,pct))}" aria-valuemin="0" aria-valuemax="100"`:''}><span style="${known?`width:${Math.max(0,Math.min(100,pct))}%`:''}"></span></div>`:''}${hasEta&&active?`<p class="small muted">时间为估计${eta.basis?'：'+esc(String(eta.basis).replace(/[。.]$/,'')):'，可能随处理阶段变化'}。</p>`:''}${progress?.detail?`<p class="small">${esc(progress.detail)}</p>`:''}${events.length?`<details class="execution-record"><summary>执行记录 · ${events.length} 项</summary><ol>${events.map(event=>`<li><span class="small muted">${durationLabel(Number(event.elapsed_ms)/1000)}</span><div><strong>${esc(event.label||event.stage_label||'处理步骤')}</strong>${event.detail?`<p>${esc(event.detail)}</p>`:''}</div>${event.status?`<span class="tag gray">${esc({completed:'已完成',running:'进行中',failed:'未完成',cancelled:'已停止',skipped:'已跳过',pending:'等待处理',queued:'排队中',interrupted:'已中断'}[event.status]||event.status)}</span>`:''}</li>`).join('')}</ol><p class="small muted">记录展示处理步骤、工具与资料范围，不代表事实已核实。</p></details>`:''}</div>`;
+    return `<div class="ai-progress${compact?' compact':''}" data-progress-status="${esc(status)}"><div class="row wrap between"><strong>${esc(stage)}</strong><span class="small muted">已用 ${durationLabel(elapsed/1000)}${active?hasEta?` · 预计还需 ${durationLabel(low)}–${durationLabel(high)}`:' · 剩余时间暂无法估计':''}</span></div>${active?`<div class="ai-progress-track${known?'':' indeterminate'}" role="progressbar" aria-label="${known?'已完成步骤比例':'等待模型或服务返回'}" ${known?`aria-valuenow="${Math.max(0,Math.min(100,pct))}" aria-valuemin="0" aria-valuemax="100"`:''}><span style="${known?`width:${Math.max(0,Math.min(100,pct))}%`:''}"></span></div>`:''}${hasEta&&active?`<p class="small muted">时间为估计${eta.basis?'：'+esc(String(eta.basis).replace(/[。.]$/,'')):'，可能随处理阶段变化'}。</p>`:''}${progress?.detail?`<p class="small">${esc(progress.detail)}</p>`:''}${events.length?`<details class="execution-record"><summary>执行记录 · ${events.length} 项</summary><ol>${events.map(event=>`<li><span class="small muted">${durationLabel(Number(event.elapsed_ms)/1000)}</span><div><strong>${esc(event.label||event.stage_label||'处理步骤')}</strong>${event.detail?`<p>${esc(event.detail)}</p>`:''}</div>${event.status?`<span class="tag gray">${esc({completed:'已完成',running:'进行中',failed:'未完成',cancelled:'已停止',skipped:'已跳过',pending:'等待处理',queued:'排队中',interrupted:'已中断',needs_input:'等待补充'}[event.status]||event.status)}</span>`:''}</li>`).join('')}</ol><p class="small muted">记录展示处理步骤、工具与资料范围，不代表事实已核实。</p></details>`:''}</div>`;
   }
   function renderAiProgress(kind) {
     if(kind==='ask'&&view().askMode==='local')return '';
@@ -244,9 +243,39 @@
   function updateAiProgressRegions(){updateAiControls();$$('[data-ai-progress]').forEach(node=>replaceProgressRegion(node,renderAiProgress(node.dataset.aiProgress)));}
   function conversationScope(kind,state=view()) {
     const meeting=record('meetings',state.meetingId);
-    const scope=kind==='meeting'?{project_id:String(meeting?.project_id||''),purpose:'meeting',source_ids:[],metadata:{meeting_id:String(state.meetingId||'')}}:kind==='valuation'?{project_id:String(state.valuationProjectId||''),purpose:'valuation',source_ids:[],metadata:{method:state.valuationMethod}}:kind==='agent'?{project_id:String(state.agentProjectScope?state.researchProject||'':''),purpose:'actions',source_ids:[],metadata:{}}:{project_id:String(state.researchProject||''),purpose:kind==='workflow'?'workflow':'ask',source_ids:[...state.selectedSources].map(String).sort(),metadata:kind==='workflow'?{workflow_key:state.workflowKey}:{}};
+    const scope=kind==='start'?{project_id:String(state.startProject||''),purpose:'plan',source_ids:[...state.startSourceIds].map(String).filter(id=>!state.startProject||String(record('documents',id)?.project_id||'')===String(state.startProject)).sort(),metadata:{}}:kind==='meeting'?{project_id:String(meeting?.project_id||''),purpose:'meeting',source_ids:[],metadata:{meeting_id:String(state.meetingId||'')}}:kind==='valuation'?{project_id:String(state.valuationProjectId||''),purpose:'valuation',source_ids:[],metadata:{method:state.valuationMethod}}:kind==='agent'?{project_id:String(state.agentProjectScope?state.researchProject||'':''),purpose:'actions',source_ids:[],metadata:{}}:{project_id:String(state.researchProject||''),purpose:kind==='workflow'?'workflow':'ask',source_ids:[...state.selectedSources].map(String).sort(),metadata:kind==='workflow'?{workflow_key:state.workflowKey}:{}};
     return {...scope,key:JSON.stringify([scope.project_id,scope.purpose,scope.source_ids,scope.metadata])};
   }
+  const clarificationKey=(kind,state=view())=>`${kind}:${conversationScope(kind,state).key}`;
+  function clarification(kind,state=view()){return state.clarifications.get(clarificationKey(kind,state));}
+  function composerValue(kind,value,state=view()){return clarification(kind,state)?.draft??value??'';}
+  function composerDraft(kind,state=view()){return composerValue(kind,kind==='start'?state.startMessage:kind==='valuation'?state.valuationText:kind==='meeting'?state.meetingInstructions.get(String(state.meetingId)):kind==='agent'?state.agentMessage:kind==='workflow'?state.workflowMessage:state.question,state);}
+  function setComposerDraft(kind,value){const card=clarification(kind);if(card)card.draft=value;else if(kind==='start')view().startMessage=value;else if(kind==='valuation')view().valuationText=value;else if(kind==='meeting')view().meetingInstructions.set(String(view().meetingId),value);else view()[kind==='agent'?'agentMessage':kind==='workflow'?'workflowMessage':'question']=value;}
+  function clarifiedTask(kind,input,{allowEmpty=false}={}){
+    const card=clarification(kind),text=String(input||'').trim();
+    if(!card)return text;
+    if(!text)return allowEmpty||card.response.prerequisite?card.task:'';
+    return `${card.task}\n\n补充说明：${text}`;
+  }
+  function needsInput(kind,response,task,{run=null,key=null}={}){
+    if(response?.status!=='needs_input')return false;
+    const state=run?.state||view(),scopeKey=key||`${kind}:${run?.conversationScope?.key||conversationScope(kind,state).key}`,previous=state.clarifications.get(scopeKey);
+    state.clarifications.set(scopeKey,{response,task:String(task||previous?.task||''),originalTask:previous?.originalTask||String(task||''),draft:'',receivedAt:Date.now()});
+    if(run)run.needsInput=true;
+    if(kind==='workflow')state.workflowRequest=null;
+    return true;
+  }
+  function prerequisite(kind,task,message,questions){const previous=clarification(kind);if(previous&&!previous.response.prerequisite)notify('请在补充说明中回答上面的问题，已确认的信息会保留。',true);else needsInput(kind,{status:'needs_input',purpose:kind,message,questions,known_conditions:[],prerequisite:true},task);render();requestAnimationFrame(()=>$(kind==='valuation'?'#valuation-text':kind==='start'?'#start-input':kind==='meeting'?'#meeting-revision-input':'#question-input')?.focus());}
+  function renderClarification(kind){
+    const card=clarification(kind);if(!card)return '';
+    const response=card.response,conditions=Array.isArray(response.known_conditions)?response.known_conditions.slice(0,12):[],questions=Array.isArray(response.questions)?response.questions.slice(0,3):[];
+    const sources=questions.some(q=>/sources?|documents?|material|材料|资料/.test(String(q.id)+' '+String(q.label)))||response.prerequisite&&['ask','workflow'].includes(kind);
+    const general=kind==='ask'&&view().askMode!=='local'&&(!view().selectedSources.size||questions.some(q=>(q.options||[]).some(option=>/general|一般解释/.test(option.value+' '+option.label))));
+    const options=questions.flatMap(q=>q.options||[]).filter(option=>!/general|sources|documents|选择资料|一般解释/.test(String(option.value)+' '+String(option.label))).slice(0,6);
+    return `<section class="clarification-card" data-clarification-kind="${esc(kind)}" aria-live="polite"><div class="row wrap between"><h3>一起补全这项工作</h3>${actionButton('重新开始','clarification-reset','plus','small ghost',`data-kind="${esc(kind)}"`)}</div><p>${esc(response.message||'我已保留你的要求。请补充下面的信息，再继续处理。')}</p>${conditions.length?`<dl class="known-conditions">${conditions.map(item=>`<div><dt>${esc(item.label)}</dt><dd>${esc(typeof item.value==='object'?JSON.stringify(item.value):item.value)}</dd></div>`).join('')}</dl>`:''}${questions.length?`<ul class="clarification-questions">${questions.map(q=>`<li><strong>${esc(q.label)}</strong>${q.hint?`<p class="small muted">${esc(q.hint)}</p>`:''}</li>`).join('')}</ul>`:''}${sources||general||options.length?`<div class="row wrap mt-12">${sources?actionButton('选择资料','clarification-sources','file','small soft',`data-kind="${esc(kind)}"`)+actionButton('添加文件','upload','upload','small ghost'):''}${general?actionButton('先给一般解释','clarification-general','spark','small soft','data-kind="ask"'):''}${options.map(option=>actionButton(option.label,'clarification-option','','small ghost',`data-kind="${esc(kind)}" data-value="${esc(option.label||option.value)}"`)).join('')}</div>`:''}${card.originalTask?`<details class="clarification-original"><summary>查看最初的要求</summary><p class="plain-lines">${esc(card.originalTask)}</p></details>`:''}<p class="small muted">直接用自己的话补充即可，已确认的信息会保留。</p></section>`;
+  }
+  function friendlyAiError(error){if(error?.status===403)return '这次请求未获允许。你的输入已保留，可刷新会话或检查当前权限后重试。';if(error?.status===429)return '模型当前繁忙，请稍后重试。已确认的信息和本次补充都已保留。';if(error?.status>=500||/provider|connection|connect|timeout|模型|连接|超时|fetch/i.test(error?.message||''))return '暂时没有收到模型回复。请稍后重试，或选择其他模型；你的输入和已确认的信息都已保留。';return error?.message||'本次未完成，请重试；输入已保留。';}
+  function showAiError(error){if(error?.name==='AbortError'||error?.name==='StaleRequestError')return;notify(friendlyAiError(error),true);}
   function currentConversation(kind){return view().conversations.get(conversationScope(kind).key);}
   const conversationMatches=(item,scope)=>item.purpose===scope.purpose&&String(item.project_id||'')===scope.project_id&&JSON.stringify((item.source_ids||[]).map(String).sort())===JSON.stringify(scope.source_ids)&&Object.entries(scope.metadata).every(([key,value])=>String(item.metadata?.[key]||'')===String(value));
   function renderConversation(kind) {
@@ -282,17 +311,18 @@
     const response=await api(`/conversations/${encodeURIComponent(id)}`),conversation=response.conversation;if(view()!==state||conversationScope(kind).key!==scope.key)return;
     if(!conversation||!conversationMatches(conversation,scope)){notify('这段对话的项目、材料或用途不同，请先核对当前范围。',true);return;}
     state.conversations.set(scope.key,conversation);
-    if(kind==='workflow')state.workflowRequest=null;if(kind==='valuation'&&!state.valuationJson.trim()){const previous=[...(conversation.turns||[])].reverse().find(turn=>turn.status==='completed'&&turn.output_snapshot?.assumptions);if(previous){state.valuationJson=JSON.stringify(previous.output_snapshot.assumptions,null,2);state.valuationProposal={assumptions:previous.output_snapshot.assumptions,missing:[],unmapped_fields:[]};state.valuationResult=null;}}
-    const turn=[...(conversation.turns||[])].reverse().find(item=>item.status==='completed');
-    if(kind==='workflow'){state.workflowRevisionId=turn?.current_artifact?.id||conversation.metadata?.current_artifact?.id||'';}
+    if(kind==='workflow')state.workflowRequest=null;if(kind==='valuation'&&!state.valuationJson.trim()){const previous=[...(conversation.turns||[])].reverse().find(turn=>['completed','needs_input'].includes(turn.status)&&turn.output_snapshot?.assumptions);if(previous){state.valuationJson=JSON.stringify(previous.output_snapshot.assumptions,null,2);state.valuationProposal=previous.output_snapshot;state.valuationResult=null;}}
+    const turn=[...(conversation.turns||[])].reverse().find(item=>['completed','needs_input'].includes(item.status));
+    if(turn?.output_snapshot?.status==='needs_input'){const draft=composerDraft(kind,state);needsInput(kind,turn.output_snapshot,turn.user_message||'');if(draft&&draft!==turn.user_message)clarification(kind,state).draft=draft;}
+    if(kind==='workflow'){const completed=[...(conversation.turns||[])].reverse().find(item=>item.status==='completed');state.workflowRevisionId=completed?.current_artifact?.id||conversation.metadata?.current_artifact?.id||'';}
     render();notify('已恢复对话上下文，未发送的输入保留。');
   }
   async function showConversationHistory(kind) {
     const current=currentConversation(kind);if(!current?.id)return;
     const response=await api(`/conversations/${encodeURIComponent(current.id)}`),conversation=response.conversation;if(!conversation)return;
-    openModal('对话记录',`<div class="conversation-transcript">${(conversation.turns||[]).map(turn=>`<article><p class="small muted">${esc(dateLabel(turn.created_at,true))} · ${esc({completed:'已完成',cancelled:'已停止',failed:'未完成',interrupted:'已中断'}[turn.status]||turn.status)}</p><h3>你的要求</h3><p class="plain-lines">${esc(turn.user_message)}</p><h3>回复</h3><div class="markdown-body">${readable(turn.assistant_message||'没有已完成的回复')}</div></article>`).join('')||'<p>还没有已完成的对话。</p>'}</div>`,async()=>{}, {wide:true,submitText:'关闭'});
+    openModal('对话记录',`<div class="conversation-transcript">${(conversation.turns||[]).map(turn=>`<article><p class="small muted">${esc(dateLabel(turn.created_at,true))} · ${esc({completed:'已完成',needs_input:'等待补充',cancelled:'已停止',failed:'未完成',interrupted:'已中断'}[turn.status]||turn.status)}</p><h3>你的要求</h3><p class="plain-lines">${esc(turn.user_message)}</p><h3>回复</h3><div class="markdown-body">${readable(turn.assistant_message||'没有已完成的回复')}</div></article>`).join('')||'<p>还没有已完成的对话。</p>'}</div>`,async()=>{}, {wide:true,submitText:'关闭'});
   }
-  function resetConversation(kind){const state=view(),scope=conversationScope(kind,state);if(state.aiKinds.size){notify('先停止或等待当前请求，再开始新对话。',true);return;}state.conversations.delete(scope.key);state.aiReports.delete(kind);if(kind==='workflow'){state.workflowRevisionId='';state.workflowRequest=null;}render();notify('已开始新对话，当前输入和材料选择保留。');}
+  function resetConversation(kind){const state=view(),scope=conversationScope(kind,state);if(state.aiKinds.size){notify('先停止或等待当前请求，再开始新对话。',true);return;}const card=clarification(kind,state);state.clarifications.delete(clarificationKey(kind,state));if(card?.draft)setComposerDraft(kind,card.draft);state.conversations.delete(scope.key);state.aiReports.delete(kind);if(kind==='ask')state.askAnswerScope='';if(kind==='workflow'){state.workflowRevisionId='';state.workflowRequest=null;}render();notify('已开始新对话，当前输入和材料选择保留。');}
   function renderArchiveReceipt(receipt) {
     if(!receipt)return '';
     const status=receipt.status,failed=status==='failed',files=Array.isArray(receipt.files)?receipt.files:[],title=receipt.title||record(receipt.collection,receipt.record_id)?.title||files[0]?.name||LABELS[receipt.collection]||'项目交付';
@@ -342,7 +372,7 @@
     clearAiTimers(run);
     const owned=run.state.aiKinds.get(run.kind)===run;
     if(owned){run.state.aiKinds.delete(run.kind);run.state[AI_BUSY[run.kind]]=false;}
-    if(!run.stopped){run.state.aiRuns.delete(run.id);run.progress={...run.progress,status:run.error?'failed':'completed',stage_label:run.error?'本次处理未完成':'本次处理已结束',elapsed_ms:Date.now()-run.startedAt,eta:null};run.state.aiReports.set(run.kind,run);}
+    if(!run.stopped){run.state.aiRuns.delete(run.id);run.progress={...run.progress,status:run.needsInput?'needs_input':run.error?'failed':'completed',stage_label:run.needsInput?'等待你补充信息':run.error?'本次处理未完成':'本次处理已结束',elapsed_ms:Date.now()-run.startedAt,eta:null};run.state.aiReports.set(run.kind,run);}
     updateAiControls();return owned;
   }
   function aiStopButton(kind) {
@@ -440,7 +470,7 @@
     $('#workspace-switch').innerHTML = `<span class="workspace-icon">${icon(app.workspace === 'personal' ? 'user' : 'briefcase')}</span><span class="workspace-copy">${workspaceName()}<small>${app.workspace === 'personal' ? 'PERSONAL · 仅自己可见' : 'DEMO · 全部为合成数据'}</small></span>${icon('down')}`;
     $('#breadcrumb').innerHTML = `<span>${workspaceName()}</span><span class="slash">/</span><span class="current">${route[1]}</span>`;
     $('#footer-workspace').textContent = `${workspaceName()} · ${app.workspace === 'demo' ? '合成演示数据' : '本地存储'}`;
-    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.8.0';
+    $('#version-label').textContent = app.boot?.version ? `v${String(app.boot.version).replace(/^v/, '')}` : 'v1.9.0';
     updateAiControls();
   }
   function render() {
@@ -618,8 +648,8 @@
 
   async function runAgent(messageOverride) {
     const state = view(); if (state.agentBusy||state.asking||state.workflowBusy) return;
-    const message = (typeof messageOverride==='string'?messageOverride:($('#agent-input')?.value||'')).trim(); state.agentMessage = message;
-    if (!message) { notify('先说一句你要做什么。', true); return; }
+    const message = clarifiedTask('agent',typeof messageOverride==='string'?messageOverride:($('#agent-input')?.value||'')); if(message)state.agentMessage = message;
+    if (!message) { prerequisite('agent',state.agentMessage,'你希望我帮你完成什么？',[{id:'task',label:'说说要创建、查询或修改什么记录。',hint:'例如：把本次会议里的待办整理成任务。'}]);return; }
     if(!requireModel('agent'))return;
     const {mode,id:model}=modelSelection('agent');
     const projectId = state.agentProjectScope ? (state.researchProject || '') : '';
@@ -630,31 +660,39 @@
       const conversationId=await ensureConversation('agent',run);
       const result = await aiRequest(run,'/agent',{ message,mode,provider:mode,model_id: model, project_id: projectId, conversation_id:conversationId });
       acceptConversation(run,result);
+      if(needsInput('agent',result,message,{run}))return;
+      state.clarifications.delete(clarificationKey('agent',state));
       state.agentSteps = Array.isArray(result.steps) ? result.steps : [];
       state.agentAnswer = result.answer || '';
       state.agentResultProject = projectId;
       state.agentHistoryByScope.set(projectId, [...history, { role: 'user', content: message }, { role: 'assistant', content: result.answer || '' }].slice(-8));
       state.agentMessage = '';
       if (state.agentSteps.length) await refreshData();
-    } catch (error) { if (state.aiKinds.get('agent')===run&&error.name !== 'StaleRequestError') { state.agentAnswer = ''; showError(error); } }
+    } catch (error) { if (state.aiKinds.get('agent')===run&&error.name !== 'StaleRequestError') { state.agentAnswer = ''; showAiError(error); } }
     finally { if(finishAiRun(run)&&view() === state)render(); }
   }
   async function startWork(purposeOverride) {
     const state = view(); if(state.startBusy || app.uploadBusy)return;
     const purpose = typeof purposeOverride === 'string' ? purposeOverride : ($('#start-purpose')?.value || state.startPurpose);
-    const message = ($('#start-input')?.value || state.startMessage || '').trim(); state.startMessage = message;
+    const message = clarifiedTask('start',$('#start-input')?.value??state.startMessage); if(message)state.startMessage = message;
     const projectId = $('#start-project')?.value ?? state.startProject; state.startProject=projectId;
-    if(!message && !purpose){notify('用一句话说说你要完成什么，或选择一项工作。',true);return;}
+    if(!message && !purpose){prerequisite('start',state.startMessage,'今天想完成哪件工作？',[{id:'purpose',label:'说说你想得到什么结果。',hint:'可以是研究、会议整理、邮件、协议分析或财务模型。'}]);return;}
+    if(!workflowInfo(purpose)&&!requireModel('start'))return;
     const run=beginAiRun('start',state);render();
     try {
       const recipe=workflowInfo(purpose);
-      const plan=recipe?{workflow_key:recipe.key,route:'research',question:message||recipe.description,label:recipe.title}:await aiRequest(run,'/workflows/plan',{message});
+      const choice=modelSelection('start'),conversationId=recipe?'':await ensureConversation('start',run);
+      const plan=recipe?{workflow_key:recipe.key,route:'research',question:message||recipe.description,label:recipe.title}:await aiRequest(run,'/workflows/plan',{message,mode:choice.mode,provider:choice.mode,model_id:choice.id,project_id:projectId,document_ids:conversationScope('start',state).source_ids,conversation_id:conversationId});
       assertAiRun(run);
+      acceptConversation(run,plan);
+      if(needsInput('start',plan,message,{run}))return;
+      state.clarifications.delete(clarificationKey('start',state));
       const question=plan.question||message, route=plan.route;
       if(route==='finance'||route==='model'){
         if(state.valuationPending){notify('当前模型还在处理，请稍后再准备新的模型。',true);return;}
         setModelSelection('valuation',modelSelectionId(modelSelection('start')));state.valuationText=question;state.valuationProjectId=projectId;state.valuationProposal=null;state.valuationJson='';state.valuationResult=null;state.valuationError='';state.valuationScenarioResult=null;state.valuationScenariosJson='';
-        state.valuationMethod=/\blbo\b|杠杆收购/i.test(question)?'lbo':/\bdcf\b|现金流折现/i.test(question)?'dcf':/p\s*\/\s*s|市销率/i.test(question)?'ps':'net_income';
+        state.valuationMethod=['net_income','ps','dcf','lbo'].includes(plan.method)?plan.method:/\blbo\b|杠杆收购/i.test(question)?'lbo':/\bdcf\b|现金流折现/i.test(question)?'dcf':/p\s*\/\s*s|市销率/i.test(question)?'ps':'net_income';
+        state.clarifications.delete(clarificationKey('valuation',state));
         if(await navigate('finance')){assertAiRun(run);notify('已带入建模需求。确认方法和假设后即可计算并保存模型。');}return;
       }
       if(route==='meetings'||route==='meeting'){
@@ -679,16 +717,16 @@
       if(selected){state.workflowKey=selected.key;state.workflowQuality='';state.workflowMessage=question;state.workflowError='';if(state.askMode==='local')restoreResearchModel();}else state.question=question;
       render();requestAnimationFrame(()=>$('#question-input')?.focus());
       notify(selected?.requires_sources?'已准备工作要求，请选择材料后生成草稿。':'已准备工作要求，确认后生成并保存草稿。');
-    }catch(error){showError(error);}
+    }catch(error){showAiError(error);}
     finally{if(finishAiRun(run)&&view()===state)render();}
   }
   async function runWorkflow() {
     const state=view();if(state.workflowBusy||state.asking||state.agentBusy)return;
     const recipe=workflowInfo(state.workflowKey);if(!recipe){notify('这项工作暂时不可用，请刷新页面。',true);return;}
-    const message=($('#question-input')?.value||'').trim();state.workflowMessage=message;
-    if(!message){notify('先描述你要交付的内容。',true);return;}
+    const message=clarifiedTask('workflow',$('#question-input')?.value);if(message)state.workflowMessage=message;
+    if(!message){prerequisite('workflow',state.workflowMessage,'你希望这份草稿解决什么问题？',[{id:'task',label:'说说主要目的和读者。',hint:'例如：为投委会整理投资判断与待核实问题。'}]);return;}
     const ids=[...state.selectedSources].sort();
-    if(recipe.requires_sources&&!ids.length){notify('请先明确选中本次使用的材料。',true);return;}
+    if(recipe.requires_sources&&!ids.length){prerequisite('workflow',message,'我已保留工作要求。请先选择这次要使用的材料。',[{id:'sources',label:'这份草稿应参考哪些材料？',hint:'勾选左侧资料，或添加文件后继续。'}]);return;}
     const {mode,id:modelId}=modelSelection('workflow');
     if(mode==='local'){notify('交付草稿需要可用模型，请先选择模型；本地检索不会发送资料。',true);return;}
     if(ids.some(id=>record('documents',id)?.kind==='memory')){notify('个人记忆只用于本地检索，请取消记忆材料或切换到问资料。',true);return;}
@@ -698,15 +736,18 @@
     const signature=JSON.stringify([payload,ids.map(id=>record('documents',id)?.updated_at||''),record('projects',projectId)?.updated_at||'']);
     if(state.workflowRequest?.signature!==signature)state.workflowRequest={signature,id:crypto.randomUUID()};
     payload.request_id=state.workflowRequest.id;
+    const pendingClarification=clarification('workflow',state);if(pendingClarification)pendingClarification.sentDraft=pendingClarification.draft;
     const run=beginAiRun('workflow-submit',state,payload.request_id);state.workflowError='';render();
     try{
       payload.conversation_id=await ensureConversation('workflow',run);
       const response=await aiRequest(run,'/workflows/jobs',payload);
+      acceptConversation(run,response);
+      if(needsInput('workflow',response,message,{run}))return;
       if(!response.job?.id)throw new Error('任务尚未登记，请重试。');
       if(state.workflowRequest?.id===run.id)state.workflowRequest.jobId=String(response.job.id);
       await acceptWorkflowJobs([response.job]);
       if(response.job.status!=='completed')notify(response.job.status==='cancelled'?'这项任务已停止。': ['failed','interrupted'].includes(response.job.status)?'这项任务未完成，可在进度卡查看原因并重试。':'任务已登记，可继续工作；进度会自动更新。');
-    }catch(error){if(state.aiKinds.get('workflow-submit')===run&&error.name!=='StaleRequestError'&&error.name!=='AbortError')state.workflowError=error.message;showError(error);}
+    }catch(error){if(state.aiKinds.get('workflow-submit')===run&&error.name!=='StaleRequestError'&&error.name!=='AbortError')state.workflowError=friendlyAiError(error);showAiError(error);}
     finally{if(finishAiRun(run)&&view()===state){if(app.page==='research')render();scheduleWorkflowPoll();}}
   }
   function workflowQuality(state=view()) {
@@ -724,21 +765,21 @@
     return seconds<60?`${seconds}秒`:`${Math.floor(seconds/60)}分${seconds%60}秒`;
   }
   function renderWorkflowActivity() {
-    const state=view(), active=state.workflowJobs.filter(activeWorkflowJob), failed=state.workflowJobs.filter(job=>['failed','interrupted'].includes(job.status));
-    if(!active.length&&!failed.length&&!state.workflowJobConnectionError)return '';
-    return `<div class="workflow-activity row wrap mt-12">${icon(active.length?'clock':'info')}<span>${active.length?`${active.length} 项工作正在后台整理`:failed.length?`${failed.length} 项工作未完成`:'正在恢复任务连接'}</span>${actionButton('查看进度','workflow-progress','','small ghost')}</div>`;
+    const state=view(), active=state.workflowJobs.filter(activeWorkflowJob), failed=state.workflowJobs.filter(job=>['failed','interrupted'].includes(job.status)),waiting=state.workflowJobs.filter(job=>job.status==='needs_input');
+    if(!active.length&&!failed.length&&!waiting.length&&!state.workflowJobConnectionError)return '';
+    return `<div class="workflow-activity row wrap mt-12">${icon(active.length?'clock':'info')}<span>${active.length?`${active.length} 项工作正在后台整理`:waiting.length?`${waiting.length} 项工作等你补充信息`:failed.length?`${failed.length} 项工作未完成`:'正在恢复任务连接'}</span>${actionButton('查看进度','workflow-progress','','small ghost')}</div>`;
   }
   function renderWorkflowJobs() {
     const state=view(),jobs=state.workflowJobs.filter(job=>job.status!=='completed'&&(!state.researchProject||String(job.project_id)===String(state.researchProject)));
     const connection=state.workflowJobConnectionError?`<div class="banner amber workflow-reconnect">${icon('warning')}<div><strong>连接暂时中断</strong>任务可能仍在后台运行，将自动重新查询。${actionButton('重新查询','workflow-reconnect','','small ghost')}</div></div>`:'';
-    const labels={queued:'等待处理',running:'正在整理',failed:'任务未完成',interrupted:'处理已中断',cancelled:'已停止'};
+    const labels={queued:'等待处理',running:'正在整理',failed:'任务未完成',interrupted:'处理已中断',cancelled:'已停止',needs_input:'等你补充信息'};
     return connection+jobs.map(job=>{
       const key=String(job.id),failed=['failed','interrupted'].includes(job.status),cancelled=job.status==='cancelled',active=activeWorkflowJob(job);
       const stages=Array.isArray(job.stages)?job.stages:[],current=stages.find(stage=>stage.key===job.stage)||stages.find(stage=>stage.status==='running');
       const stop=active?actionButton(state.workflowStopBusy.has(key)?'正在停止…':state.workflowStopErrors.has(key)?'重试停止':'停止','workflow-job-stop','stop','small soft',`data-id="${esc(job.id)}" ${state.workflowStopBusy.has(key)?'disabled':''}`):'';
       const progress=progressHtml({...job,stage_label:job.stage_label||current?.label||labels[job.status],detail:job.detail||current?.detail},{elapsed:Number(job.elapsed_ms)||Math.max(0,Date.now()-Date.parse(job.created_at)),active});
       const stageList=stages.length?`<ol class="job-stages">${stages.map(stage=>`<li class="stage-${esc(stage.status||'pending')}">${['completed','done','pass'].includes(stage.status)?icon('check'):cancelled?icon('stop'):stage.status==='running'?'<span class="spinner"></span>':icon('clock')}<span>${esc(stage.label||'处理步骤')}</span></li>`).join('')}</ol>`:'';
-      const terminal=cancelled?'<p class="small muted mt-12">已停止后续整理，不会自动重试。工作要求和材料选择保留，可修改后重新发送。</p>':failed?`<div class="mt-12">${banner(labels[job.status],job.error||'处理未完成，已保存任务范围。','error','warning')}</div>${job.retryable?`<div class="row mt-12">${actionButton('按原任务重试','workflow-job-retry','refresh','soft',`data-id="${esc(job.id)}" ${state.workflowRetryBusy.has(key)?'disabled':''}`)}<span class="small muted">沿用提交时的要求与材料范围。</span></div>`:''}`:'<p class="small muted mt-12">任务已保存在工作区，可离开页面或继续输入；完成后会显示草稿及检查记录。</p>';
+      const terminal=job.status==='needs_input'?`<p class="mt-12">${esc(job.result?.message||'还需要确认几项条件。工作要求和材料范围已保留，尚未保存交付草稿。')}</p>${actionButton('补充后继续','workflow-job-clarify','spark','soft',`data-id="${esc(job.id)}"`)}`:cancelled?'<p class="small muted mt-12">已停止后续整理，不会自动重试。工作要求和材料选择保留，可修改后重新发送。</p>':failed?`<div class="mt-12">${banner(labels[job.status],friendlyAiError({message:job.error||'处理未完成，已保存任务范围。'}),'amber','warning')}${job.error&&friendlyAiError({message:job.error})!==job.error?`<details class="mt-12"><summary>查看连接说明</summary><p class="small">${esc(job.error)}</p></details>`:''}</div>${job.retryable?`<div class="row mt-12">${actionButton('按原任务重试','workflow-job-retry','refresh','soft',`data-id="${esc(job.id)}" ${state.workflowRetryBusy.has(key)?'disabled':''}`)}<span class="small muted">沿用提交时的要求与材料范围。</span></div>`:''}`:'<p class="small muted mt-12">任务已保存在工作区，可离开页面或继续输入；完成后会显示草稿及检查记录。</p>';
       return `<article class="panel workflow-job${failed?' job-failed':''}" data-job-id="${esc(job.id)}" data-job-status="${esc(job.status)}"><div class="row wrap between"><h3>${esc(workflowInfo(job.workflow_key)?.title||'交付草稿')} · ${labels[job.status]||'处理中'}</h3>${stop}<span class="small muted">${job.quality_mode==='thorough'?'深入整理':'快速草稿'} · ${esc(jobElapsed(job))}</span></div><p class="small muted mt-12">${esc(projectName(job.project_id))} · ${esc(workflowModelLabel(job))} · 提交时选定 ${(job.document_ids||[]).length} 份材料</p><p class="question-history">${esc(job.message)}</p>${progress}${stageList}${terminal}${state.workflowStopErrors.has(key)?banner('停止未确认',state.workflowStopErrors.get(key),'error','warning'):''}</article>`;
     }).join('');
   }
@@ -769,7 +810,23 @@
       if(previous&&Number(previous.revision)>Number(job.revision))continue;
       if(job.status==='cancelled'&&state.workflowRequest?.jobId===String(job.id))state.workflowRequest=null;
       byId.set(String(job.id),job);
+      if(job.status==='needs_input'&&job.result?.status==='needs_input'){
+        const scope={project_id:String(job.project_id||''),purpose:'workflow',source_ids:(job.document_ids||[]).map(String).sort(),metadata:{workflow_key:job.workflow_key}};
+        scope.key=JSON.stringify([scope.project_id,scope.purpose,scope.source_ids,scope.metadata]);
+        const cardKey=`workflow:${scope.key}`;
+        if(!previous||previous.status!=='needs_input')needsInput('workflow',job.result,job.message,{key:cardKey});
+        const id=job.result.conversation_id||job.conversation_id;
+        if(id){const conversation=state.conversations.get(scope.key)||{};state.conversations.set(scope.key,{...conversation,id,context:job.result.context||conversation.context});state.conversationLists.delete(scope.key);}
+        if(state.workflowRequest?.jobId===String(job.id))state.workflowRequest=null;
+      }
       if(job.status==='completed'&&job.result?.deliverable?.id) {
+        if(state.workflowMessage===job.message&&conversationScope('workflow',state).project_id===String(job.project_id||'')&&state.workflowKey===job.workflow_key){
+          const card=clarification('workflow',state);state.clarifications.delete(clarificationKey('workflow',state));
+          if(card&&app.page==='research'&&state.researchIntent==='workflow'){
+            const input=$('#question-input');if(card.draft!==card.sentDraft)state.workflowMessage=card.draft;else if(input&&input.value===card.sentDraft)input.value=state.workflowMessage;
+            $('[data-clarification-kind="workflow"]')?.remove();const label=$('label[for="question-input"]');if(label)label.textContent='工作要求';const button=$('#ask-form button[type="submit"]');if(button&&!button.disabled)button.innerHTML=icon('arrow')+'生成并保存草稿';
+          }
+        }
         const result={...job.result,question:job.message,project_id:job.project_id,workflow_key:job.workflow_key,generation_id:job.id,created_at:job.created_at};
         const existing=state.workflowResults.find(item=>String(item.deliverable?.id)===String(result.deliverable.id));
         if(!existing){state.workflowResults.unshift(result);state.workflowResults=state.workflowResults.slice(0,30);for(const [scopeKey,conversation] of state.conversations){if(conversation.id===result.conversation_id){state.conversations.set(scopeKey,{...conversation,context:result.context||conversation.context,turns_total:Number(conversation.turns_total||0)+1});state.conversationLists.delete(scopeKey);}}}
@@ -784,6 +841,14 @@
     state.workflowResults.sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
     if(refresh){await refreshData();if(view()!==state)return;renderShell();if(completed)notify(`${completed>1?completed+' 份':'新的'}草稿已保存，可打开修改或导出。`);}
     updateWorkflowRegions();
+  }
+  async function resumeJobClarification(id){
+    const state=view(),job=state.workflowJobs.find(item=>String(item.id)===String(id));if(!job||job.status!=='needs_input')return;
+    if(state.aiKinds.size){notify('先停止或等待当前请求，再继续这项工作。',true);return;}
+    if(!await navigate('research',{projectId:job.project_id||''}))return;
+    state.researchIntent='workflow';state.workflowKey=job.workflow_key;state.workflowQuality=job.quality_mode;state.workflowMessage=job.message||'';state.workflowRevisionId=job.revision_of||'';state.selectedSources=new Set((job.document_ids||[]).map(String).filter(source=>record('documents',source)));state.workflowRequest=null;
+    setModelSelection('ask',modelSelectionId({mode:job.mode,id:job.model_id}),{persist:false});
+    needsInput('workflow',job.result,job.message);render();$('#question-input')?.focus();
   }
   function scheduleWorkflowPoll(delay) {
     clearTimeout(workflowPollTimer);workflowPollTimer=null;
@@ -870,12 +935,12 @@
   function renderStartWork(){
     const state=view(), busy=state.startBusy||app.uploadBusy;
     const selected=list('documents').filter(doc=>state.startSourceIds.has(String(doc.id))&&String(doc.project_id||'')===String(state.startProject));
-    return `<section class="panel start-work"><h2>今天要完成什么？</h2><p class="small muted">研究、Memo、协议、技术解释、邮件和模型，用一句话开始。</p><form id="start-form"><label for="start-input" class="sr-only">描述工作需求</label><div class="start-input-row"><textarea id="start-input" rows="2" maxlength="8000" aria-describedby="start-keyboard-hint" placeholder="例如：为这个项目写一份投委会 Memo，并列出仍需核实的问题" ${busy?'disabled':''}>${esc(state.startMessage)}</textarea><button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>准备中…':icon('arrow')+'开始工作'}</button>${aiStopButton('start')}</div><p id="start-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p><div class="row wrap start-controls">${projectFilter('start-project',state.startProject,'关联项目（可选）',true,busy)}${actionButton('新建项目','start-create-project','plus','small soft',busy?'disabled':'')}<select id="start-purpose" class="compact-select" aria-label="工作用途" ${busy?'disabled':''}><option value="">自动识别用途</option>${workflowOptions(state.startPurpose)}</select><select id="start-model" class="model-picker compact-select" data-model-picker="start" aria-label="工作模型" ${busy?'disabled':''}>${unifiedModelOptions('start')}</select>${actionButton('添加文件','start-upload','upload','small soft',busy?'disabled':'')}${actionButton('添加文件夹','start-folder','upload','small soft',busy?'disabled':'')}</div></form>${aiProgressRegion('start')}<div class="row wrap start-shortcuts" aria-label="常用工作">${['dd','ic','legal','technology','email','expert_request'].filter(key=>workflowInfo(key)).map(key=>actionButton(workflowInfo(key).title,'start-workflow','','small ghost',`data-key="${esc(key)}" ${busy?'disabled':''}`)).join('')}${actionButton('会议整理','start-route','meetings','small ghost',`data-request="整理会议纪要" ${busy?'disabled':''}`)}${actionButton('财务建模','start-route','finance','small ghost',`data-request="建立财务估值模型" ${busy?'disabled':''}`)}${actionButton('整理项目材料','start-route','file','small ghost',`data-request="整理项目材料和版本" ${busy?'disabled':''}`)}</div>${selected.length?`<p class="small muted mt-12">已添加 ${selected.length} 份材料：${selected.map(doc=>esc(doc.title)).join('、')}。开始工作后可核对范围，再生成草稿。</p>`:''}</section>`;
+    return `<section class="panel start-work"><h2>今天要完成什么？</h2><p class="small muted">研究、Memo、协议、技术解释、邮件和模型，用一句话开始。</p>${renderConversation('start')}${renderClarification('start')}<form id="start-form"><label for="start-input" class="sr-only">${clarification('start')?'补充说明':'描述工作需求'}</label><div class="start-input-row"><textarea id="start-input" rows="2" maxlength="8000" aria-describedby="start-keyboard-hint" placeholder="${clarification('start')?'直接补充你的要求，例如读者、目的或希望得到的结果':'例如：为这个项目写一份投委会 Memo，并列出仍需核实的问题'}" ${busy?'disabled':''}>${esc(composerValue('start',state.startMessage))}</textarea><button type="submit" class="button primary" ${busy?'disabled':''}>${busy?'<span class="spinner"></span>准备中…':icon('arrow')+(clarification('start')?'补充后继续':'开始工作')}</button>${aiStopButton('start')}</div><p id="start-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p><div class="row wrap start-controls">${projectFilter('start-project',state.startProject,'关联项目（可选）',true,busy)}${actionButton('新建项目','start-create-project','plus','small soft',busy?'disabled':'')}<select id="start-purpose" class="compact-select" aria-label="工作用途" ${busy?'disabled':''}><option value="">自动识别用途</option>${workflowOptions(state.startPurpose)}</select><select id="start-model" class="model-picker compact-select" data-model-picker="start" aria-label="工作模型" ${busy?'disabled':''}>${unifiedModelOptions('start')}</select>${actionButton('添加文件','start-upload','upload','small soft',busy?'disabled':'')}${actionButton('添加文件夹','start-folder','upload','small soft',busy?'disabled':'')}</div></form>${aiProgressRegion('start')}<div class="row wrap start-shortcuts" aria-label="常用工作">${['dd','ic','legal','technology','email','expert_request'].filter(key=>workflowInfo(key)).map(key=>actionButton(workflowInfo(key).title,'start-workflow','','small ghost',`data-key="${esc(key)}" ${busy?'disabled':''}`)).join('')}${actionButton('会议整理','start-route','meetings','small ghost',`data-request="整理会议纪要" ${busy?'disabled':''}`)}${actionButton('财务建模','start-route','finance','small ghost',`data-request="建立财务估值模型" ${busy?'disabled':''}`)}${actionButton('整理项目材料','start-route','file','small ghost',`data-request="整理项目材料和版本" ${busy?'disabled':''}`)}</div>${selected.length?`<p class="small muted mt-12">已添加 ${selected.length} 份材料：${selected.map(doc=>esc(doc.title)).join('、')}。开始工作后可核对范围，再生成草稿。</p>`:''}</section>`;
   }
   function renderOverview() {
     const recentMeetings=[...list('meetings')].sort((a,b)=>String(b.updated_at).localeCompare(String(a.updated_at))).slice(0,3);
     const recentNotes=[...list('notes')].sort((a,b)=>String(b.updated_at).localeCompare(String(a.updated_at))).slice(0,3);
-    return heading('工作首页','YOUR WORK, ONE PLACE','围绕你要完成的工作，串起项目资料、判断、模型与交付。') +
+    return heading('工作首页','YOUR WORK, ONE PLACE','围绕你要完成的工作，串起项目资料、判断、模型与交付。',actionButton('使用指南与案例','guidance','book','small ghost')) +
       (app.workspace==='demo'?banner('合成示例','当前演示内容与个人工作区分开保存。','blue','info'):'') +
       renderStartWork() + `<div id="workflow-activity">${renderWorkflowActivity()}</div>` +
       renderProjects(true) +
@@ -947,20 +1012,20 @@
     const notes = list('notes').filter(note => !state.researchProject || String(note.project_id) === state.researchProject);
     const memorySelected = selected.some(doc => doc.kind === 'memory');
     const actionMode=state.researchIntent==='actions', workflowMode=state.researchIntent==='workflow', busy=state.asking||state.agentBusy||state.workflowBusy;
-    const activeWorkflow=workflowInfo(state.workflowKey);
+    const activeWorkflow=workflowInfo(state.workflowKey),composerKind=actionMode?'agent':workflowMode?'workflow':'ask';
     const visibleWorkflowResults=state.workflowResults.map((result,index)=>({result,index})).filter(item=>!state.researchProject||String(item.result.project_id)===String(state.researchProject));
     const visibleAnswers=state.answers.map((answer,index)=>({answer,index})).filter(item=>!state.researchProject||String(item.answer.project_id)===String(state.researchProject));
-    return heading('研究工作台', 'EVIDENCE BEFORE OPINION', '选项目资料、点一键提纲或直接提问；GPT / DSH 回答保留出处并可转为结论与行动。', actionButton('新建研究结论', 'create', 'plus', '', 'data-collection="notes"') + actionButton('导入材料', 'upload', 'upload', 'primary', app.uploadBusy ? 'disabled' : '')) +
+    return heading('研究工作台', 'EVIDENCE BEFORE OPINION', '选项目资料、点一键提纲或直接提问；模型回答保留出处，并可转为结论与行动。', actionButton('新建研究结论', 'create', 'plus', '', 'data-collection="notes"') + actionButton('导入材料', 'upload', 'upload', 'primary', app.uploadBusy ? 'disabled' : '')) +
       `<div class="toolbar"><div class="toolbar-group">${projectFilter('research-project', state.researchProject)}${state.researchProject ? groupFilter('source-group', state.sourceGroup, state.researchProject) : ''}<span class="small muted">${list('documents').length} 份可用资料 · ${notes.length} 条研究结论</span></div></div>
       ${app.uploadBusy ? '<div class="file-progress"><span class="spinner"></span>正在解析并导入文件，请稍候…</div>' : ''}
       <div class="research-layout"><section class="panel source-panel">${panelTitle('证据材料', 'file', `<span class="count-pill">${sources.length}</span>`)}<div class="panel-body" style="padding:0 16px 13px">${searchInput('source-search', '搜索材料标题', state.sourceQuery)}</div><div class="sources-toolbar"><label><input type="checkbox" id="source-select-all" ${sources.length && sources.every(doc => state.selectedSources.has(String(doc.id))) ? 'checked' : ''} ${!sources.length ? 'disabled' : ''}>选中筛选结果</label><span>已选 ${selected.length} 份</span></div><div class="source-list">${sources.length ? sources.map(doc => `<div class="source-row${state.selectedSources.has(String(doc.id)) ? ' selected' : ''}"><input type="checkbox" data-source-id="${esc(doc.id)}" aria-label="选择材料：${esc(doc.title)}" ${state.selectedSources.has(String(doc.id)) ? 'checked' : ''}><div class="source-info"><button type="button" class="source-name" data-action="document" data-id="${esc(doc.id)}">${esc(doc.title)}</button><div class="source-meta"><span>${doc.kind === 'memory' ? '记忆 · 仅本地' : esc(doc.material_type || doc.category || '研究材料')}${doc.task_group ? ' · ' + esc(doc.task_group) : ''}${doc.version_label ? ' · ' + esc(doc.version_label) : ''}</span><span>${doc.page_count ? `${esc(doc.page_count)} 页` : esc(doc.filename?.split('.').pop()?.toUpperCase() || '纯文本')}</span></div></div></div>`).join('') : empty('file', '还没有证据材料', '导入 TXT / MD / PDF / DOCX，或直接粘贴原文。扫描 PDF 暂不支持 OCR。', '', true)}</div><div class="source-footer">${actionButton('粘贴导入', 'paste-import', 'plus', 'small', app.uploadBusy ? 'disabled' : '')}${actionButton('导入文件', 'upload', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}${actionButton('导入文件夹', 'upload-folder', 'upload', 'small', app.uploadBusy ? 'disabled' : '')}</div></section>
-      <div class="stack"><section class="panel question-panel"><div class="question-heading"><span class="question-icon">${icon('research')}</span><div><h2>研究助理</h2><small>模型简要解释选定资料，保留原文引用；仅查阅时不改记录。</small></div></div><div class="composer-mode"><label for="research-intent">用途</label><select id="research-intent" aria-label="AI任务类型" ${busy ? 'disabled' : ''}><option value="ask"${selectedAttr('ask',state.researchIntent)}>问资料 · 不改记录</option><option value="workflow"${selectedAttr('workflow',state.researchIntent)}>生成交付草稿</option><option value="actions"${selectedAttr('actions',state.researchIntent)}>操作工作区 · 创建/保存记录</option></select>${workflowMode?`<select id="workflow-purpose" aria-label="交付用途" ${busy?'disabled':''}>${workflowOptions(state.workflowKey)}</select><select id="workflow-quality" aria-label="整理深度" ${busy?'disabled':''}><option value="thorough"${selectedAttr('thorough',workflowQuality(state))}>深入整理 · 分析、复核、修订</option><option value="fast"${selectedAttr('fast',workflowQuality(state))}>快速草稿</option></select>`:''}</div>${workflowMode?`<p class="small muted">${esc(activeWorkflow?.description||'描述你要完成的交付，再确认使用的材料。')}</p>${state.workflowError?`<div class="mt-12">${banner('草稿未生成',state.workflowError,'error','warning')}</div>`:''}`:`<div class="row wrap mt-12" aria-label="常用研究任务"><button type="button" class="button small soft" data-action="research-template" data-template="brief">项目速览</button><button type="button" class="button small soft" data-action="research-template" data-template="gaps">尽调缺口</button><button type="button" class="button small soft" data-action="research-template" data-template="compare">口径差异</button></div>`}${renderConversation(actionMode?'agent':workflowMode?'workflow':'ask')}<form id="ask-form"><div class="question-box"><label for="question-input" class="sr-only">研究问题</label><textarea id="question-input" name="question" required maxlength="${actionMode||workflowMode?8000:4000}" aria-describedby="research-keyboard-hint" placeholder="${actionMode?'例如：把我输入的访谈文字保存成资料，并创建三条待核实任务。':workflowMode?'描述交付要求、对象、结构，以及希望重点解决的问题。':'例如：收入增长的主要驱动是什么？这些资料有哪些矛盾或缺口？'}" ${busy ? 'disabled' : ''}>${esc(actionMode?state.agentMessage:workflowMode?state.workflowMessage:state.question)}</textarea>
+      <div class="stack"><section class="panel question-panel"><div class="question-heading"><span class="question-icon">${icon('research')}</span><div><h2>研究助理</h2><small>模型简要解释选定资料，保留原文引用；仅查阅时不改记录。</small></div></div><div class="composer-mode"><label for="research-intent">用途</label><select id="research-intent" aria-label="AI任务类型" ${busy ? 'disabled' : ''}><option value="ask"${selectedAttr('ask',state.researchIntent)}>问资料 · 不改记录</option><option value="workflow"${selectedAttr('workflow',state.researchIntent)}>生成交付草稿</option><option value="actions"${selectedAttr('actions',state.researchIntent)}>操作工作区 · 创建/保存记录</option></select>${workflowMode?`<select id="workflow-purpose" aria-label="交付用途" ${busy?'disabled':''}>${workflowOptions(state.workflowKey)}</select><select id="workflow-quality" aria-label="整理深度" ${busy?'disabled':''}><option value="thorough"${selectedAttr('thorough',workflowQuality(state))}>深入整理 · 分析、复核、修订</option><option value="fast"${selectedAttr('fast',workflowQuality(state))}>快速草稿</option></select>`:''}</div>${workflowMode?`<p class="small muted">${esc(activeWorkflow?.description||'描述你要完成的交付，再确认使用的材料。')}</p>${state.workflowError?`<div class="mt-12">${banner('草稿未生成',state.workflowError,'error','warning')}</div>`:''}`:`<div class="row wrap mt-12" aria-label="常用研究任务"><button type="button" class="button small soft" data-action="research-template" data-template="brief">项目速览</button><button type="button" class="button small soft" data-action="research-template" data-template="gaps">尽调缺口</button><button type="button" class="button small soft" data-action="research-template" data-template="compare">口径差异</button></div>`}${renderConversation(composerKind)}${renderClarification(composerKind)}<form id="ask-form"><div class="question-box"><label for="question-input" class="sr-only">${clarification(composerKind)?'补充说明':'研究问题'}</label><textarea id="question-input" name="question" maxlength="${actionMode||workflowMode?8000:4000}" aria-describedby="research-keyboard-hint" placeholder="${clarification(composerKind)?'直接用自己的话补充上面的问题。':actionMode?'例如：把我输入的访谈文字保存成资料，并创建三条待核实任务。':workflowMode?'描述交付要求、对象、结构，以及希望重点解决的问题。':'例如：收入增长的主要驱动是什么？这些资料有哪些矛盾或缺口？'}" ${busy ? 'disabled' : ''}>${esc(composerValue(composerKind,actionMode?state.agentMessage:workflowMode?state.workflowMessage:state.question))}</textarea>
       <div class="question-bottom">
       ${actionMode ? `<select id="agent-model" class="model-picker" data-model-picker="agent" aria-label="操作助手模型" ${busy?'disabled':''}>${unifiedModelOptions('agent')}</select><label class="agent-toggle"><input type="checkbox" id="agent-project-scope" ${state.researchProject && state.agentProjectScope?'checked':''} ${state.researchProject ? '' : 'disabled'}>关联当前公司</label>` :
       `<select id="ask-mode" class="model-picker" data-model-picker="ask" aria-label="研究模型" ${busy?'disabled':''}>${unifiedModelOptions('ask',{allowLocal:!workflowMode})}</select>`}
-      <button type="submit" class="button primary" ${busy||!modelAvailable(actionMode?'agent':'ask')?'disabled':''}>${busy?'<span class="spinner"></span>正在处理…':icon('arrow')+(actionMode?'执行工作区操作':workflowMode?'生成并保存草稿':'查阅选定材料')}</button>${busy?aiStopButton(state.asking?'ask':state.agentBusy?'agent':'workflow-submit'):''}</div><p id="research-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p></div>
-      ${actionMode?`<div class="source-scope">操作范围：${esc(state.researchProject && state.agentProjectScope?projectName(state.researchProject):'工作区')}。选中资料正文不会自动随操作请求发送；分析资料请切回“问资料”。</div>`:`<div class="source-scope"><span>本次范围：</span>${selected.length ? selected.map(doc => `<span class="tag ${doc.kind === 'memory' ? 'amber' : 'green'}">${esc(doc.title)}</span>`).join('') : workflowMode&&!activeWorkflow?.requires_sources?'<span>可直接填写工作要求；选定材料时会显示在这里。</span>':'<span>请先在左侧明确选择材料，不会默认检索或发送全库。</span>'}</div>`}
-      <div class="mt-12">${modelStatus(actionMode?'agent':'ask')}</div>${!actionMode ? `${memorySelected && state.askMode !== 'local' ? `<div class="mt-12">${banner('', '选中范围含个人记忆。记忆只做本地检索；请切换“仅找原文”，或取消记忆来源。', 'amber', 'lock')}</div>` : ''}<p class="inline-note">${workflowMode?'确认后生成并保存草稿，使用左侧已勾选材料或本次工作要求。':state.askMode==='local'?'仅在本机查找左侧勾选材料中的原文。':'使用所选模型简要解释左侧勾选资料。'}不发送未选资料与个人记忆。</p>` : ''}</form>${aiProgressRegion(actionMode?'agent':workflowMode?'workflow-submit':'ask')}</section>
+      <button type="submit" class="button primary" ${busy||!modelAvailable(actionMode?'agent':'ask')?'disabled':''}>${busy?'<span class="spinner"></span>正在处理…':icon('arrow')+(clarification(composerKind)?'补充后继续':actionMode?'执行工作区操作':workflowMode?'生成并保存草稿':'查阅选定材料')}</button>${busy?aiStopButton(state.asking?'ask':state.agentBusy?'agent':'workflow-submit'):''}</div><p id="research-keyboard-hint" class="composer-hint">Enter 发送 · Shift+Enter 换行</p></div>
+      ${actionMode?`<div class="source-scope">操作范围：${esc(state.researchProject && state.agentProjectScope?projectName(state.researchProject):'工作区')}。选中资料正文不会自动随操作请求发送；分析资料请切回“问资料”。</div>`:`<div class="source-scope"><span>本次范围：</span>${selected.length ? selected.map(doc => `<span class="tag ${doc.kind === 'memory' ? 'amber' : 'green'}">${esc(doc.title)}</span>`).join('') : !workflowMode&&state.askAnswerScope==='general'?'<span>一般解释 · 未选公司资料，不核实公司事实。</span>':workflowMode&&!activeWorkflow?.requires_sources?'<span>可直接填写工作要求；选定材料时会显示在这里。</span>':'<span>请先在左侧明确选择材料，不会默认检索或发送全库。</span>'}</div>`}
+      <div class="mt-12">${modelStatus(actionMode?'agent':'ask')}</div>${!actionMode ? `${memorySelected && state.askMode !== 'local' ? `<div class="mt-12">${banner('', '选中范围含个人记忆。记忆只做本地检索；请切换“仅找原文”，或取消记忆来源。', 'amber', 'lock')}</div>` : ''}<p class="inline-note">${workflowMode?'确认后生成并保存草稿，使用左侧已勾选材料或本次工作要求。':state.askMode==='local'?'仅在本机查找左侧勾选材料中的原文。':state.askAnswerScope==='general'?'按你明确选择的一般解释回答，不核实公司具体事实。':'使用所选模型简要解释左侧勾选资料。'}不发送未选资料与个人记忆。</p>` : ''}</form>${aiProgressRegion(actionMode?'agent':workflowMode?'workflow-submit':'ask')}</section>
       ${renderAgentResult()}
       <div id="workflow-jobs" class="workflow-jobs" aria-live="polite">${renderWorkflowJobs()}</div><div id="workflow-results" class="workflow-results">${visibleWorkflowResults.map(({result,index})=>renderWorkflowResult(result,index)).join('')}</div>
       ${visibleAnswers.length ? visibleAnswers.map(({answer,index})=>renderAnswer(answer,index)).join('') : `<section class="panel">${empty('quote', '从有出处的回答开始', '选中资料并提问，让所选模型简要解释；点击引用可查看原文。资料不足时说明缺口，一般解释与公司事实分开。', '', true)}</section>`}
@@ -976,10 +1041,12 @@
     const state = view(); if (state.asking||state.agentBusy||state.workflowBusy) return;
     if(state.researchIntent==='actions') return runAgent($('#question-input')?.value||'');
     if(state.researchIntent==='workflow') return runWorkflow();
-    const question = $('#question-input').value.trim(); state.question = question;
-    if (!question) { notify('请先输入一个研究问题。', true); return; }
+    const supplement=$('#question-input').value.trim();
+    if(clarification('ask')&&/先解释|一般解释|一般说明|通用解释/.test(supplement)&&view().askMode!=='local')state.askAnswerScope='general';
+    const question = clarifiedTask('ask',supplement,{allowEmpty:state.askAnswerScope==='general'}); if(question)state.question = question;
+    if (!question) { prerequisite('ask',state.question,'你想了解什么？',[{id:'question',label:'用自己的话说说研究问题。'}]);return; }
     const ids = [...state.selectedSources];
-    if (!ids.length) { notify('请先明确选中至少一份资料。', true); return; }
+    if (!ids.length&&state.askAnswerScope!=='general') { prerequisite('ask',question,'我已保留你的问题。请选择资料，或先了解这个问题的一般原理。',[{id:'sources',label:'你希望我依据哪些资料解释？',hint:'一般解释不会核实这家公司的具体事实。'}]);return; }
     const {mode,id:modelId}=modelSelection('ask');
     const allowExternal = mode !== 'local'; // Selection itself is the scope; no per-request consent gate.
     if (mode !== 'local') {
@@ -996,10 +1063,12 @@
     const run=beginAiRun('ask',state);render();
     try {
       const conversationId=mode==='local'?'':await ensureConversation('ask',run);
-      const response = await aiRequest(run,'/ask',{ question, project_id: projectId, document_ids: ids, mode,provider:mode,model_id: modelId, allow_external: allowExternal,...(conversationId?{conversation_id:conversationId}:{}) });
+      const response = await aiRequest(run,'/ask',{ question, project_id: projectId, document_ids: ids, mode,provider:mode,model_id: modelId, allow_external: allowExternal,...(state.askAnswerScope==='general'?{answer_scope:'general'}:{}),...(conversationId?{conversation_id:conversationId}:{}) });
       acceptConversation(run,response);
+      if(needsInput('ask',response,question,{run}))return;
+      state.clarifications.delete(clarificationKey('ask',state));
       state.answers.unshift({ ...response, question, project_id: projectId,document_ids:ids }); state.answers = state.answers.slice(0, 8);
-    } catch (error) { showError(error); }
+    } catch (error) { showAiError(error); }
     finally { if(finishAiRun(run)&&view() === state && app.page === 'research')render(); }
   }
   function applyResearchTemplate(key) {
@@ -1130,17 +1199,17 @@
     const header = '<section class="panel"><div class="meeting-header"><div><h2>' + h.esc(meeting.title) + '</h2><div class="meeting-meta">' + h.esc(meeting.date || '日期待补充') + ' · ' + h.esc(h.projectName(meeting.project_id)) + ' · ' + h.esc(meeting.participants || '') + '</div></div>' + h.iconButton('编辑会议与逐字稿','edit','edit','data-collection="meetings" data-id="' + h.esc(meeting.id) + '"') + h.iconButton('删除会议','delete','trash','data-collection="meetings" data-id="' + h.esc(meeting.id) + '"','danger') + '</div><div class="meeting-body">';
     const transcript = '<details class="transcript-details"' + (meeting.transcript ? '' : ' open') + '><summary>逐字稿 · ' + String((meeting.transcript || '').length) + ' 字</summary><div class="transcript-text">' + h.esc(meeting.transcript || '尚未粘贴逐字稿。可直接 Ctrl+V 粘贴。') + '</div></details>';
     const warnings = draft?.warnings?.length ? h.banner('AI 整理说明', draft.warnings.join('；'), 'amber', 'info') : '';
-    const intake = '<div class="field mt-18"><label for="meeting-transcript-input">原文转写 · 粘贴或拖入 TXT / DOCX / PDF</label><div class="meeting-transcript-drop" data-meeting-transcript-drop="true"><textarea id="meeting-transcript-input" rows="7" placeholder="Ctrl+V 粘贴逐字稿；也可把 TXT / DOCX / PDF 拖到此区域。原文会自动保存。">' + h.esc(state.meetingTranscriptDraft || meeting.transcript || '') + '</textarea></div><div class="row wrap mt-12"><select id="meeting-model" class="model-picker" data-model-picker="meeting" aria-label="纪要整理模型" ' + (state.meetingAiBusy ? 'disabled' : '') + '>' + h.localModels + '</select>' + h.actionButton(state.meetingAiBusy ? '正在整理…' : summary ? '按要求修订并保存纪要' : '一键整理并保存纪要','meeting-ai-draft','spark','primary','data-id="' + h.esc(meeting.id) + '" ' + (state.meetingAiBusy || !modelAvailable('meeting') ? 'disabled' : '')) + aiStopButton('meeting') + '</div></div>';
+    const intake = '<div class="field mt-18"><label for="meeting-transcript-input">原文转写 · 粘贴或拖入 TXT / DOCX / PDF</label><div class="meeting-transcript-drop" data-meeting-transcript-drop="true"><textarea id="meeting-transcript-input" rows="7" placeholder="Ctrl+V 粘贴逐字稿；也可把 TXT / DOCX / PDF 拖到此区域。原文会自动保存。">' + h.esc(state.meetingTranscriptDraft || meeting.transcript || '') + '</textarea></div><div class="row wrap mt-12"><select id="meeting-model" class="model-picker" data-model-picker="meeting" aria-label="纪要整理模型" ' + (state.meetingAiBusy ? 'disabled' : '') + '>' + h.localModels + '</select>' + h.actionButton(state.meetingAiBusy ? '正在整理…' : clarification('meeting') ? '补充后继续' : summary ? '按要求修订并保存纪要' : '一键整理并保存纪要','meeting-ai-draft','spark','primary','data-id="' + h.esc(meeting.id) + '" ' + (state.meetingAiBusy || !modelAvailable('meeting') ? 'disabled' : '')) + aiStopButton('meeting') + '</div></div>';
     const form = '<form id="meeting-summary-form" data-id="' + h.esc(meeting.id) + '"><div class="field mt-18"><label for="meeting-summary">可编辑会议纪要</label><textarea id="meeting-summary" name="summary" class="summary-textarea" placeholder="生成后可直接编辑；自动保存。">' + h.esc(summary) + '</textarea></div><div class="row wrap"><span class="tiny muted" id="meeting-save-state">' + h.esc(state.meetingSaveState || '本机自动保存；项目文件归档状态见项目详情') + '</span><span class="spacer"></span>' + h.actionButton('Word','meeting-export','download','small soft','data-id="' + h.esc(meeting.id) + '" data-format="docx"') + h.actionButton('PDF','meeting-export','download','small primary','data-id="' + h.esc(meeting.id) + '" data-format="pdf"') + '</div></form>';
     const tasks = relatedTasks.length ? '<div class="subsection-title"><h3>已识别行动 (' + relatedTasks.length + ')</h3></div>' + relatedTasks.map(task => '<div class="task-line"><span class="tag ' + (task.status === '完成' ? 'green' : 'blue') + '">' + h.esc(task.status) + '</span><span class="task-title">' + h.esc(task.title) + '</span></div>').join('') : '';
-    return header + transcript + intake + '<div class="mt-12">' + modelStatus('meeting') + '</div>' + (state.meetingMode==='rules'?'':renderConversation('meeting')) + '<div class="field mt-12"><label for="meeting-revision-input">补充要求 / 继续修订</label><textarea id="meeting-revision-input" rows="2" maxlength="8000" placeholder="例如：保留专家原话，补充一个待核实问题表。Enter 发送，Shift+Enter 换行。">' + esc(state.meetingInstructions.get(String(meeting.id))||'') + '</textarea></div>' + (state.meetingMode==='rules'?'':aiProgressRegion('meeting')) + warnings + form + renderArchiveReceipt(state.meetingArchive) + tasks + '</div></section>';
+    return header + transcript + intake + '<div class="mt-12">' + modelStatus('meeting') + '</div>' + (state.meetingMode==='rules'?'':renderConversation('meeting')) + renderClarification('meeting') + '<div class="field mt-12"><label for="meeting-revision-input">' + (clarification('meeting')?'补充说明':'补充要求 / 继续修订') + '</label><textarea id="meeting-revision-input" rows="2" maxlength="8000" placeholder="例如：保留专家原话，补充一个待核实问题表。Enter 发送，Shift+Enter 换行。">' + esc(composerValue('meeting',state.meetingInstructions.get(String(meeting.id))||'')) + '</textarea></div>' + (state.meetingMode==='rules'?'':aiProgressRegion('meeting')) + warnings + form + renderArchiveReceipt(state.meetingArchive) + tasks + '</div></section>';
   }
 
   async function generateExpertNotes(id,button){
     const state=view();if(state.meetingAiBusy)return;
     const meeting=record('meetings',id);if(!meeting)return;
     const transcript=(view().meetingTranscriptDraft||'').trim()||String(meeting.transcript||'').trim();
-    if(!transcript){notify('先粘贴或拖入逐字稿。',true);return;}
+    if(!transcript){prerequisite('meeting',state.meetingInstructions.get(String(id))||'整理本次会议纪要','请先提供这一次会议的原文，我会按原文整理纪要。',[{id:'transcript',label:'粘贴逐字稿，或把转写文件拖到上面的原文区域。'}]);return;}
     if(!requireModel('meeting'))return;
     const {mode,id:modelId}=modelSelection('meeting');
     if(mode==='rules')return withBusy(button,'正在按规则整理…',async()=>{
@@ -1154,14 +1223,17 @@
         if(transcript!==String(meeting.transcript||''))await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript}});
         assertAiRun(run);
         const conversationId=await ensureConversation('meeting',run);
-        const result=await aiRequest(run,'/meeting-draft',{mode,provider:mode,model_id:modelId,transcript,title:meeting.title,date:meeting.date,participants:meeting.participants,project_id:meeting.project_id||'',save_meeting_id:String(id),conversation_id:conversationId,revision_instructions:state.meetingInstructions.get(String(id))||''});
+        const instructions=clarifiedTask('meeting',$('#meeting-revision-input')?.value??state.meetingInstructions.get(String(id)),{allowEmpty:true});state.meetingInstructions.set(String(id),instructions);
+        const result=await aiRequest(run,'/meeting-draft',{mode,provider:mode,model_id:modelId,transcript,title:meeting.title,date:meeting.date,participants:meeting.participants,project_id:meeting.project_id||'',save_meeting_id:String(id),conversation_id:conversationId,revision_instructions:instructions});
         acceptConversation(run,result);
+        if(needsInput('meeting',result,instructions||'整理本次会议纪要',{run}))return;
+        state.clarifications.delete(clarificationKey('meeting',state));
         state.meetingArchive=result.archive;
         if(!result.saved)throw new Error('纪要尚未确认保存，请重新查询会议记录。');
         const normalized=formatMinuteText(result.summary||'');
         state.drafts.set(String(id),{...result,summary:normalized,actions:result.actions||[]});
         await refreshData();notify('纪要已整理并自动保存。可编辑后直接导出 Word / PDF。');
-      }finally{if(finishAiRun(run)&&view()===state)render();}
+      }catch(error){showAiError(error);}finally{if(finishAiRun(run)&&view()===state)render();}
     });
   }
   async function autoSaveMeeting(form){
@@ -1245,7 +1317,7 @@
   }
 
   function renderFinance() {
-    return window.LocalWorkOSValuation.render({ state: view(), boot: app.boot, helpers: { heading, actionButton, aiStopButton, aiProgressRegion, renderConversation, renderArchiveReceipt, icon, banner, empty, esc, projectOptions, selectedAttr, unifiedModelOptions,modelStatus,modelAvailable,number, percent } });
+    return window.LocalWorkOSValuation.render({ state: view(), boot: app.boot, helpers: { heading, actionButton, aiStopButton, aiProgressRegion, renderConversation, renderArchiveReceipt, renderClarification, clarification, composerValue, icon, banner, empty, esc, projectOptions, selectedAttr, unifiedModelOptions,modelStatus,modelAvailable,number, percent } });
     const state = view(); const result = state.financeResult;
     return heading('回报测算', 'ASSUMPTIONS, NOT PROMISES', '所有数字由本地代码计算。展示假设、公式与边界，不让模型代算。', actionButton('保存测算简报', 'finance-deliverable', 'deliverables', '', !result || state.financeDirty ? 'disabled title="请先用当前假设完成测算"' : '')) +
       `<div class="section-gap">${banner('简化权益回报模型 · 非完整 LBO', '单位：人民币百万元。不包含税务、营运资本明细、交易费用及完整债务契约；情景和敏感性不是收益承诺。现金流、IRR / MOIC 的定义请查看下方公式。', 'amber', 'info')}</div>
@@ -1279,18 +1351,20 @@
 
   async function parseValuationAssumptions() {
     const state = view(); if (state.valuationPending) return;
-    const text = $('#valuation-text')?.value.trim() || ''; state.valuationText = text;
-    if (!text) { notify('请先用自然语言描述交易和主要假设。', true); return; }
+    const text = clarifiedTask('valuation',$('#valuation-text')?.value);if(text)state.valuationText = text;
+    if (!text) { prerequisite('valuation',state.valuationText,'先说说你想算什么，有哪些已知条件？',[{id:'requirements',label:'直接描述金额、倍数或交易安排即可。',hint:'不必填写固定格式；缺少的口径会逐步确认。'}]);return; }
     if(!requireModel('valuation'))return;
     const {mode,id:modelId}=modelSelection('valuation');
-    const run=beginAiRun('valuation',state);state.valuationError = ''; state.valuationResult = null; render();
+    const run=beginAiRun('valuation',state);state.valuationError = '';state.valuationErrorDetails=''; state.valuationResult = null; render();
     try {
       const conversationId=await ensureConversation('valuation',run);
-      let priorAssumptions;try{priorAssumptions=JSON.parse(state.valuationJson||'{}');}catch{throw new Error('当前假设 JSON 格式不正确，请先修正后继续。');}
+      let priorAssumptions;try{priorAssumptions=JSON.parse(state.valuationJson||'{}');}catch{priorAssumptions=state.valuationProposal?.assumptions||{};}
       const result = await aiRequest(run,'/model/parse-assumptions',{ method: state.valuationMethod, text,mode,provider:mode,model_id:modelId,allow_external: true,project_id:state.valuationProjectId||'',conversation_id:conversationId,...(state.valuationJson.trim()?{prior_assumptions:priorAssumptions}:{}) });
       acceptConversation(run,result);
       if(conversationScope('valuation').key===run.conversationScope.key){state.valuationProposal = result; state.valuationJson = JSON.stringify(result.assumptions || {}, null, 2);}
-    } catch (error) { if (state.aiKinds.get('valuation')===run&&error.name !== 'StaleRequestError'&&error.name!=='AbortError') state.valuationError = error.message; }
+      if(needsInput('valuation',result,text,{run}))return;
+      state.clarifications.delete(clarificationKey('valuation',state));
+    } catch (error) { if (state.aiKinds.get('valuation')===run&&error.name !== 'StaleRequestError'&&error.name!=='AbortError'){state.valuationError = friendlyAiError(error);state.valuationErrorDetails=error.message;} }
     finally { if(finishAiRun(run)&&view() === state && app.page === 'finance')render(); }
   }
   async function calculateValuation() {
@@ -1298,9 +1372,9 @@
     const text = $('#valuation-json')?.value || state.valuationJson;
     let assumptions;
     try { assumptions = JSON.parse(text || '{}'); }
-    catch { notify('结构化假设 JSON 格式不正确。', true); return; }
+    catch { prerequisite('valuation',state.valuationText,'这组高级假设暂时无法读取。可以在上方用自然语言重新说明要调整的条件。',[{id:'assumptions',label:'说说要调整哪项金额、口径或预测。',hint:'已提取的信息会保留，不需要重新填写固定格式。'}]);return; }
     state.valuationJson = text; state.valuationPending = true; state.valuationError = ''; state.valuationResult = null; render();
-    try { state.valuationResult = await api('/model/valuation', { body: { method: state.valuationMethod, assumptions } }); state.valuationAssumptions = assumptions; }
+    try { const result=await api('/model/valuation', { body: { method: state.valuationMethod, assumptions } });if(needsInput('valuation',result,state.valuationText||'计算当前模型')){state.valuationProposal={...state.valuationProposal,...result};return;}state.valuationResult=result;state.valuationAssumptions=assumptions;state.clarifications.delete(clarificationKey('valuation',state)); }
     catch (error) { if (error.name !== 'StaleRequestError') state.valuationError = error.message; }
     finally { state.valuationPending = false; if (view() === state && app.page === 'finance') render(); }
   }
@@ -1322,7 +1396,7 @@
   }
   function loadValuationTemplate() {
     const state = view(); const templates = window.LocalWorkOSValuation?.templates || {};
-    state.valuationText = templates[state.valuationMethod] || ''; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationError = '';
+    state.clarifications.delete(clarificationKey('valuation',state));state.valuationText = templates[state.valuationMethod] || ''; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationError = '';
     render(); requestAnimationFrame(() => $('#valuation-text')?.focus());
   }
   async function loadSavedModel(id){
@@ -1331,7 +1405,7 @@
     if(!item?.method||!item.assumptions||!item.result){notify('这份交付没有保存可恢复的模型假设。',true);return;}
     if(!await navigate('finance'))return;
     const state=view();state.valuationMethod=item.method;state.valuationJson=JSON.stringify(item.assumptions,null,2);state.valuationAssumptions=item.assumptions;state.valuationResult=item.result;state.valuationProjectId=item.project_id||'';state.valuationProposal={assumptions:item.assumptions,missing:[],unmapped_fields:[]};state.valuationText='';state.valuationError='';state.valuationPending=false;state.valuationScenarioResult=null;state.valuationScenariosJson='';
-    state.conversations.delete(conversationScope('valuation').key);render();notify('模型与原假设已恢复，可修改后重新计算。');
+    state.clarifications.delete(clarificationKey('valuation',state));state.conversations.delete(conversationScope('valuation').key);render();notify('模型与原假设已恢复，可修改后重新计算。');
   }
   function presetValuationScenarios(){
     const state=view();if(state.valuationPending)return false;
@@ -1407,12 +1481,18 @@
   }
   function renderArchiveConfig(){const state=view();return `<section class="panel settings-section" id="archive-config"><h2>项目文件夹自动归档</h2><p>在配置的目录内匹配项目文件夹，保存研究结论、会议纪要和交付时生成文件版本。多个候选目录需要绑定确认。</p><form id="archive-config-form"><label for="archive-roots">项目文件夹搜索目录 · 每行一个本机绝对路径</label><textarea id="archive-roots" name="roots" rows="3" maxlength="12000" placeholder="填写运行 WorkOS 的电脑上的项目工作目录">${esc((state.artifactConfig?.roots||[]).join('\n'))}</textarea><p class="small muted mt-12">此配置只能在运行服务的电脑上修改；远程设备可查看每个项目的保存结果。</p><div class="row wrap mt-12"><button type="submit" class="button soft">保存目录配置</button>${actionButton('重新读取','archive-config-refresh','refresh','small ghost')}</div><p class="small error-text" id="archive-config-error">${esc(state.artifactConfigError||'')}</p></form></section>`;}
   async function loadArchiveConfig({force=false}={}){const state=view();if(state.artifactConfigLoading||state.artifactConfig&&!force)return;state.artifactConfigLoading=true;try{const response=await api('/artifacts/config');if(view()===state){state.artifactConfig=response;state.artifactConfigError='';const input=$('#archive-roots');if(input&&document.activeElement!==input&&!state.artifactConfigDirty)input.value=(response.roots||[]).join('\n');}}catch(error){if(view()===state&&error.name!=='StaleRequestError'){state.artifactConfigError=error.message;const node=$('#archive-config-error');if(node)node.textContent=error.message;}}finally{state.artifactConfigLoading=false;}}
+  function customModelList(){const state=view();return state.customModels?.length?state.customModels.map(model=>`<div class="custom-model-row"><div><strong>${esc(model.name||model.model_id)}</strong><p class="small muted">${esc(model.provider_label||'兼容服务')} · ${esc(model.model_id)}</p><p class="small archive-path">${esc(model.base_url)}</p></div>${actionButton('移除','custom-model-delete','trash','small ghost',`data-mode="${esc(model.mode)}"`)}</div>`).join(''):'<p class="small muted">还没有添加自定义模型。已有 WorkBuddy 模型可直接在上方选择。</p>';}
+  function renderCustomModelSettings(){return `<section class="panel settings-section"><h2>添加模型</h2><p>填写服务地址和服务商给出的模型标识。添加后会出现在所有工作的同一个模型列表中；连接是否可用可单独检测。</p><form id="custom-model-form" autocomplete="off"><div class="field"><label for="custom-model-name">显示名称（可选）</label><input id="custom-model-name" name="name" maxlength="100" placeholder="例如：团队的 Gemini（可选）"></div><div class="field"><label for="custom-model-provider">服务名称（可选）</label><input id="custom-model-provider" name="provider_label" maxlength="80" placeholder="例如：WorkBuddy / 团队服务"></div><div class="field"><label for="custom-model-base">服务地址（Base URL）</label><input id="custom-model-base" name="base_url" type="url" required placeholder="例如：http://127.0.0.1:8787/v1"></div><div class="field"><label for="custom-model-id">模型标识</label><input id="custom-model-id" name="model_id" required maxlength="160" placeholder="复制服务商给出的模型 ID"></div><div class="field"><label for="custom-model-key">API Key（按服务要求选填）</label><input id="custom-model-key" name="api_key" type="password" autocomplete="new-password" spellcheck="false"><span class="hint">密钥不回显、不写入浏览器存储；服务重启后需要重新填写。</span></div><button type="submit" class="button primary">添加到模型列表</button></form><div id="custom-model-list" class="mt-18">${customModelList()}</div></section>`;}
+  async function loadCustomModels({force=false}={}){const state=view();if(state.customModelsLoading&&!force)return;const revision=state.customModelLoadRevision=(state.customModelLoadRevision||0)+1;state.customModelsLoading=true;try{const response=await api('/models/custom');if(view()!==state||state.customModelLoadRevision!==revision)return;state.customModels=response.models||[];const node=$('#custom-model-list');if(node)node.innerHTML=customModelList();}catch(error){if(error.name!=='StaleRequestError'){const node=$('#custom-model-list');if(node)node.textContent='自定义模型列表暂时无法读取，可稍后重试。';}}finally{if(state.customModelLoadRevision===revision)state.customModelsLoading=false;}}
+  async function saveCustomModel(form){if(!form.reportValidity())return;const payload=Object.fromEntries(new FormData(form));const key=$('#custom-model-key');if(key)key.value='';try{await withBusy($('button[type="submit"]',form),'添加中…',async()=>{const response=await api('/models/custom',{body:payload});app.boot.models=response.models||app.boot.models;form.reset();await loadCustomModels({force:true});updateModelCatalogRegion();notify('模型已添加，可在统一列表中选择并检测连接。');});}finally{payload.api_key='';}}
+  async function removeCustomModel(mode){const id=String(mode||'').replace(/^custom-/,'');if(!/^[a-f0-9]{16}$/.test(id))return;const response=await api(`/models/custom/${id}`,{method:'DELETE'});app.boot.models=response.models||app.boot.models;await loadCustomModels({force:true});updateModelCatalogRegion();notify('自定义模型已从列表移除。');}
+  async function showGuidance(){const response=await api('/guidance');openModal(response.title||'使用指南与案例',`<div class="markdown-body guidance-content">${readable(response.content||'使用指南暂时没有内容。')}</div>`,async()=>{}, {wide:true,submitText:'关闭'});}
   function renderSettings() {
     const ai = app.boot?.ai || {}; const sync = app.boot?.sync || {}; const personalSync = sync.workspaces?.personal || {};
     return heading('设置与连接', 'LOCAL BY DEFAULT', '工作区、可选模型与数据安全，在这里保持透明。') +
       `<div class="settings-grid"><div class="stack"><section class="panel settings-section"><h2>你的工作区</h2><p>默认打开个人空间。演示仅包含合成记录；两套本地数据库完全隔离。</p><div class="mode-options">${[['personal', '个人工作区', '我的项目、资料与稳定记忆', 'user'], ['demo', '演示工作区', '合成示例，可安全体验完整流程', 'briefcase']].map(([mode, title, text, symbol]) => `<button type="button" class="mode-card${app.workspace === mode ? ' active' : ''}" data-action="workspace" data-workspace="${mode}" aria-pressed="${app.workspace === mode}">${icon(symbol)}<strong>${title}${app.workspace === mode ? ' · 当前' : ''}</strong><small>${text}</small></button>`).join('')}</div></section>
-      ${renderModelCatalog()}<section class="panel settings-section"><h2>模型连接配置</h2><p>各项 AI 工作共用分组模型列表。GPT 通过本机 DSH 调用，OAuth 凭据留在 DSH；选择“仅找原文”时不调用大模型。</p><div class="model-state"><span class="status-dot"></span>${app.boot?.dsh?.available ? `DSH 已接入 · 默认 ${esc((app.boot.dsh.models || []).find(item => item.id === app.boot.dsh.model)?.name || "GPT-6 Luna")}` : "未检测到 DSH；仍可使用本地检索或其他兼容模型。"}</div><p>研究页显示本次资料范围；提交问题时仅发送已勾选的证据片段，个人记忆只做本地检索。</p><h3>自定义兼容模型（选填）</h3><p>兼容 OpenAI Chat Completions。此配置仅在本次 WorkOS 服务进程内存，不保存密钥；连接需要由你自行配置。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '尚未配置自定义连接；可使用列表中的其他模型'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('按你选定的资料范围回答', '提交问题时，仅选中的非记忆资料可外发。个人记忆始终只用于本地检索。', 'amber', 'shield')}</div></section></div>
-      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.8.0')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}${app.boot?.auth?.public_login ? actionButton('退出公网登录', 'logout-public', 'lock', 'small soft') : ''}</div></section>
+      ${renderModelCatalog()}${renderCustomModelSettings()}<section class="panel settings-section"><details><summary>本机连接与临时兼容配置（高级）</summary><p>各项 AI 工作共用分组模型列表。GPT 通过本机 DSH 调用，OAuth 凭据留在 DSH；选择“仅找原文”时不调用大模型。</p><div class="model-state"><span class="status-dot"></span>${app.boot?.dsh?.available ? `DSH 已接入 · 默认 ${esc((app.boot.dsh.models || []).find(item => item.id === app.boot.dsh.model)?.name || "GPT-6 Luna")}` : "未检测到 DSH；仍可使用本地检索或其他兼容模型。"}</div><p>研究页显示本次资料范围；提交问题时仅发送已勾选的证据片段，个人记忆只做本地检索。</p><h3>自定义兼容模型（选填）</h3><p>兼容 OpenAI Chat Completions。此配置仅在本次 WorkOS 服务进程内存，不保存密钥；连接需要由你自行配置。</p><div class="model-state"><span class="status-dot"></span>${ai.configured ? `已配置 ${esc(ai.model || '')} · 不代表已验证连通` : '尚未配置自定义连接；可使用列表中的其他模型'}</div><form id="ai-settings-form" autocomplete="off"><div class="field"><label for="ai-base-url">Base URL</label><input id="ai-base-url" name="base_url" type="url" required value="${esc(ai.base_url || '')}" placeholder="https://你的服务地址/v1" autocomplete="off"></div><div class="field"><label for="ai-model">模型名称</label><input id="ai-model" name="model" required value="${esc(ai.model || '')}" placeholder="填写服务商提供的模型标识" autocomplete="off"></div><div class="field"><label for="ai-api-key">API Key · 仅服务器进程内存</label><input id="ai-api-key" name="api_key" type="password" required placeholder="重新输入密钥后保存，不回显已有密钥" autocomplete="new-password" spellcheck="false"><span class="hint">输入不会写入浏览器存储或备份；提交后清空，服务重启后需重新填写。</span></div><button type="submit" class="button primary">${icon('lock')}保存连接，不测试网络</button></form><div class="mt-18">${banner('按你选定的资料范围回答', '提交问题时，仅选中的非记忆资料可外发。个人记忆始终只用于本地检索。', 'amber', 'shield')}</div></details></section></div>
+      <div class="stack"><section class="panel settings-section"><h2>本地服务</h2><p>仅供本机单用户使用，不是云端或多人协作系统。</p><dl class="settings-dl"><div class="settings-row"><dt>服务状态</dt><dd><span class="tag green">已连接本地服务</span></dd></div><div class="settings-row"><dt>版本</dt><dd>${esc(app.boot?.version || '1.9.0')}</dd></div><div class="settings-row"><dt>当前工作区</dt><dd>${workspaceName()}</dd></div><div class="settings-row"><dt>数据目录</dt><dd>${esc(app.boot?.data_dir || '由本地服务管理')}</dd></div><div class="settings-row"><dt>记忆根目录</dt><dd>${app.boot?.memory_root_available ? '可用 · 需手动扫描导入' : '当前不可用'}</dd></div></dl><div class="mt-18">${actionButton('刷新服务状态', 'refresh-status', 'refresh', 'small')}${app.boot?.auth?.public_login ? actionButton('退出公网登录', 'logout-public', 'lock', 'small soft') : ''}</div></section>
       ${renderArchiveConfig()}<section class="panel settings-section"><h2>OneDrive 项目文件同步</h2><p>主机是唯一写入端；项目元数据、已导入资料文本、原文件、会议/研究/交付记录和 JSON 快照会在保存时镜像到 OneDrive 的 AI Agent/Local WorkOS。活动中的 SQLite/WAL 保留在本机，避免 OneDrive 文件锁与并发同步损坏；其他设备可经远程入口使用同一主机。</p><div class="model-state"><span class="status-dot"></span>${sync.enabled ? (sync.error ? esc(sync.error) : '已配置 · ' + Number(personalSync.counts?.projects || 0) + ' 个项目 · ' + Number(personalSync.counts?.documents || 0) + ' 份资料') : '未配置 OneDrive 同步根目录'}</div><div class="mt-18">${actionButton('立即同步', 'sync-onedrive', 'refresh', 'small', !sync.enabled ? 'disabled' : '')}</div><p class="inline-note mt-12">OneDrive 镜像包含原文件；旧记录若未保存原文件，需要重新导入后才能下载。${Number(sync.missing_originals_by_workspace?.[app.workspace] || 0) ? '当前有 ' + Number(personalSync.missing_originals) + ' 份原文件缺失，请重新导入。' : ''}不要手动替换活动中的 .sqlite3/WAL 文件。</p></section>
 
       <section class="panel settings-section"><h2>数据备份与恢复</h2><p>导出当前工作区的 JSON 备份，不包含 API Key。备份包含记录、解析文本与记忆副本，不包含原文件的二进制内容。请同时保留本机附件目录或 OneDrive 原文件镜像。</p><div class="row wrap">${actionButton('导出当前备份', 'backup', 'download', 'soft')}${actionButton('选择备份恢复', 'restore', 'upload')}</div><p class="inline-note mt-18">恢复前校验格式、关联和大小；服务端先备份现有数据库，再事务替换当前工作区。不跨工作区恢复。</p></section>
@@ -1522,12 +1602,12 @@
     bindSearchInput('project-search', 'projectQuery'); bindSearchInput('library-search', 'libraryQuery'); bindSearchInput('task-search', 'taskQuery'); bindSearchInput('source-search', 'sourceQuery'); bindSearchInput('memory-search', 'memoryQuery');
     bindSelect('task-project', value => { view().taskProject = value; render(); });
     bindSelect('task-priority', value => { view().taskPriority = value; render(); });
-    bindSelect('research-project', value => { const state=view();state.researchProject = value;state.sourceGroup = '';state.selectedSources.clear();state.workflowRevisionId='';state.workflowRequest=null;['ask','agent','workflow'].forEach(kind=>state.conversations.delete(conversationScope(kind).key));render(); });
+    bindSelect('research-project', value => { const state=view();state.researchProject = value;state.askAnswerScope='';state.sourceGroup = '';state.selectedSources.clear();state.workflowRevisionId='';state.workflowRequest=null;['ask','agent','workflow'].forEach(kind=>state.conversations.delete(conversationScope(kind).key));render(); });
     bindSelect('library-group', value => { view().libraryGroup = value; render(); });
     bindSelect('source-group', value => { view().sourceGroup = value; view().selectedSources.clear();['ask','workflow'].forEach(kind=>view().conversations.delete(conversationScope(kind).key));view().workflowRequest=null;render(); });
     bindSelect('start-project', value=>{if(value===CREATE_PROJECT_VALUE){createStartProject().catch(showError);return;}view().startProject=value;render();});
     bindSelect('start-purpose', value=>{view().startPurpose=value;});
-    $('#start-input')?.addEventListener('input',event=>{view().startMessage=event.target.value;});
+    $('#start-input')?.addEventListener('input',event=>setComposerDraft('start',event.target.value));
     bindSubmit('start-form',startWork);
     bindAiComposer('start-input','start-form');
     bindSelect('meeting-project', value => { captureMeetingDraft(); view().meetingProject = value; render(); });
@@ -1536,8 +1616,8 @@
     bindSelect('research-intent', value=>{view().researchIntent=value;if(value==='workflow'&&view().askMode==='local'){restoreResearchModel();notify('交付草稿需要模型。请核对模型和资料范围后再生成。');}render();requestAnimationFrame(()=>$('#question-input')?.focus());});
     bindSelect('workflow-purpose', value=>{const state=view();state.workflowKey=value;state.workflowQuality='';state.workflowError='';state.workflowRevisionId='';state.workflowRequest=null;state.conversations.delete(conversationScope('workflow').key);render();requestAnimationFrame(()=>$('#question-input')?.focus());});
     bindSelect('workflow-quality', value=>{view().workflowQuality=value;});
-    $('#question-input')?.addEventListener('input', event => { if(view().researchIntent==='actions')view().agentMessage=event.target.value;else if(view().researchIntent==='workflow')view().workflowMessage=event.target.value;else view().question=event.target.value; });
-    $$('[data-source-id]').forEach(input => input.addEventListener('change', () => { if (input.checked) view().selectedSources.add(String(input.dataset.sourceId)); else view().selectedSources.delete(String(input.dataset.sourceId));['ask','workflow'].forEach(kind=>view().conversations.delete(conversationScope(kind).key));view().workflowRequest=null;render(); }));
+    $('#question-input')?.addEventListener('input',event=>setComposerDraft(view().researchIntent==='actions'?'agent':view().researchIntent==='workflow'?'workflow':'ask',event.target.value));
+    $$('[data-source-id]').forEach(input => input.addEventListener('change', () => { if (input.checked) view().selectedSources.add(String(input.dataset.sourceId)); else view().selectedSources.delete(String(input.dataset.sourceId));view().askAnswerScope='';['ask','workflow'].forEach(kind=>view().conversations.delete(conversationScope(kind).key));view().workflowRequest=null;render(); }));
     $('#source-select-all')?.addEventListener('change', event => { filteredSources().forEach(doc => { if (event.target.checked) view().selectedSources.add(String(doc.id)); else view().selectedSources.delete(String(doc.id)); });['ask','workflow'].forEach(kind=>view().conversations.delete(conversationScope(kind).key));view().workflowRequest=null;render(); });
     $$('[data-task-status]').forEach(select => select.addEventListener('change', async () => {
       const id = select.dataset.taskStatus; const previous = record('tasks', id)?.status; select.disabled = true;
@@ -1547,6 +1627,8 @@
     bindSubmit('agent-form', runAgent);
     bindAiComposer('agent-input','agent-form');
     $('#agent-input')?.addEventListener('input', event => { view().agentMessage = event.target.value; });
+    bindSubmit('custom-model-form',saveCustomModel);
+    if(app.page==='settings')loadCustomModels();
     bindSubmit('ask-form', askQuestion); bindSubmit('meeting-summary-form', saveMeetingSummary); bindSubmit('meeting-actions-form', createMeetingTasks); bindSubmit('finance-form', calculateFinance); bindSubmit('ai-settings-form', saveAISettings);
     bindAiComposer('question-input','ask-form');
     bindSelect('valuation-method', value => { const state = view(); state.valuationMethod = value; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationScenarioResult=null;state.valuationScenariosJson='';state.valuationError = '';state.conversations.delete(conversationScope('valuation').key);render(); });
@@ -1557,9 +1639,9 @@
     meetingDrop?.addEventListener('dragleave',()=>meetingDrop.classList.remove('drag-over'));
     meetingDrop?.addEventListener('drop',async event=>{event.preventDefault();meetingDrop.classList.remove('drag-over');const file=event.dataTransfer?.files?.[0];if(!file)return;try{if(file.size>20*1024*1024)throw new Error('文件最大20MB');const base64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('读取文件失败'));reader.readAsDataURL(file)});const extracted=await api('/meeting-transcript-extract',{body:{name:file.name,base64}});const input=$('#meeting-transcript-input');input.value=extracted.transcript;input.dispatchEvent(new Event('input',{bubbles:true}));notify('已提取 '+file.name+'，正在自动保存逐字稿。');}catch(error){notify('提取逐字稿失败：'+error.message,true);}});
     $('#meeting-summary')?.addEventListener('input', event => { const state=view(); const form=$('#meeting-summary-form'); if(!form)return; captureMeetingDraft(); clearTimeout(state.meetingSaveTimer); const label=$('#meeting-save-state'); if(label)label.textContent='正在编辑…'; state.meetingSaveTimer=setTimeout(()=>autoSaveMeeting(form),700); });
-    $('#valuation-text')?.addEventListener('input', event => { view().valuationText = event.target.value; });
+    $('#valuation-text')?.addEventListener('input',event=>setComposerDraft('valuation',event.target.value));
     bindAiComposer('valuation-text','',()=>{const button=$('[data-action="valuation-parse"]');if(button&&!button.disabled)return parseValuationAssumptions();});
-    $('#meeting-revision-input')?.addEventListener('input',event=>view().meetingInstructions.set(String(view().meetingId),event.target.value));
+    $('#meeting-revision-input')?.addEventListener('input',event=>setComposerDraft('meeting',event.target.value));
     bindAiComposer('meeting-revision-input','',()=>{const button=$('[data-action="meeting-ai-draft"]');if(button&&!button.disabled)return generateExpertNotes(view().meetingId,button);});
     $('#valuation-json')?.addEventListener('input', event => { view().valuationJson = event.target.value; view().valuationResult = null; view().valuationScenarioResult = null;view().valuationScenariosJson='';$('.valuation-result')?.remove();$('#valuation-scenarios-json')?.closest('section')?.remove(); });
     $('#valuation-scenarios-json')?.addEventListener('input',event=>{view().valuationScenariosJson=event.target.value;view().valuationScenarioResult=null;});
@@ -1600,7 +1682,14 @@
   async function handleAction(button) {
     const { action, id, collection } = button.dataset;
     switch (action) {
-      case 'conversation-reset': return resetConversation(button.dataset.kind);
+      case 'guidance': return showGuidance();
+      case 'custom-model-delete': return withBusy(button,'移除中…',()=>removeCustomModel(button.dataset.mode));
+      case 'conversation-reset':
+      case 'clarification-reset': return resetConversation(button.dataset.kind);
+      case 'clarification-sources': $('#source-select-all')?.scrollIntoView({block:'center'});$('[data-source-id]')?.focus();return;
+      case 'clarification-option': setComposerDraft(button.dataset.kind,button.dataset.value||'');render();$(button.dataset.kind==='start'?'#start-input':button.dataset.kind==='valuation'?'#valuation-text':button.dataset.kind==='meeting'?'#meeting-revision-input':'#question-input')?.focus();return;
+      case 'clarification-general': {const state=view();if(state.askMode==='local')return;state.askAnswerScope='general';return askQuestion();}
+      case 'workflow-job-clarify': return resumeJobClarification(id);
       case 'conversation-history': return showConversationHistory(button.dataset.kind);
       case 'workflow-revise': return reviseWorkflow(id);
       case 'archive-bind': return bindProjectArchive(id);

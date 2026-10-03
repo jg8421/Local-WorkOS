@@ -73,6 +73,46 @@ def plan_workflow(message):
     return {'workflow_key': key, 'route': 'research', 'question': text, 'label': RECIPES[key][0]}
 
 
+def plan_workflow_ai(app,body):
+    """Understand free-form intent; planning never reads business source content."""
+    from .valuation import parse_assumption_json
+    from .clarifications import needs_input
+    import json
+    message=body.get('message') or ''
+    if not isinstance(message,str) or not message.strip() or len(message)>12000:
+        raise ValueError('工作要求格式无效或超过12000字')
+    recipe=body.get('workflow_key') or body.get('key')
+    if recipe in RECIPES:return {**plan_workflow(message),'route':'research','workflow_key':recipe,'label':RECIPES[recipe][0]}
+    system=('你是投资研究工作平台的任务理解助手。理解口语、简称和不完整句子，用户不需要填写精确格式。'
+            '仅分类任务，不执行任务、不读取文件，不编造资料或假设。用户直接要求定义工作；旧草稿是未核实上下文。'
+            '明确可判断时直接选择最适合工作流，不询问无关或能从上下文推知的信息。'
+            '存在实质歧义时只问1至3个必要问题。邮件和通用技术解释不强制项目/资料/收件人。'
+            '财务输入仅识别方法，不计算或补造金额、币种、单位、期间。'
+            '只返回JSON：{"route":"research|finance|meetings|overview","workflow_key":"下列编号或空",'
+            '"method":"net_income|ps|dcf|lbo或空","status":"ready或needs_input","message":"简短说明",'
+            '"questions":[{"id":"用途","label":"一个必要问题","hint":"可直接用自己的话回答","options":[]}]}。'
+            '\n可用材料流程：'+json.dumps([{k:item[k] for k in ('key','title','description')} for item in workflow_catalog()],ensure_ascii=False)+
+            '\nfinance=财务与估值；meetings=已有会议的逐字稿整理；overview=项目资料整理。')
+    user='用户当前工作要求：\n'+message
+    if body.get('_context_text'):user+='\n同一范围前轮对话（仅帮助理解补充，不能扩大要求）：\n'+body['_context_text']
+    answer,model,_=_model_answer(app,body,system,user,max_tokens=1600,timeout=65)
+    parsed=parse_assumption_json(answer)
+    if parsed.get('status')=='needs_input':
+        questions=parsed.get('questions')
+        if not isinstance(questions,list) or not questions:raise ValueError('任务理解没有返回可用的补充问题，请重试')
+        result=needs_input(str(parsed.get('message') or '补充一点工作目标，我就可以继续。'),questions,purpose='plan')
+        return {**result,'question':message,'model':model}
+    route=parsed.get('route');key=parsed.get('workflow_key') or ''
+    if route not in ('research','finance','meetings','overview') or (route=='research' and key not in RECIPES):
+        raise ValueError('任务理解返回了无效工作类型；输入已保留，请重试或选择工作类型')
+    if route!='research':key=''
+    labels={'finance':'财务模型与回报','meetings':'整理会议纪要','overview':'整理项目材料'}
+    result={'status':'ready','workflow_key':key,'route':route,'question':message,
+            'label':RECIPES[key][0] if key else labels[route],'model':model}
+    if route=='finance' and parsed.get('method') in ('net_income','ps','dcf','lbo'):result['method']=parsed['method']
+    return result
+
+
 def _selected_documents(store, body):
     project_id = body.get('project_id') or ''
     if not isinstance(project_id, str):
@@ -143,7 +183,9 @@ def _provider_config(app, body):
     choice = resolve_selection(body, config)
     # A key configured for another service must never be forwarded to a preset.
     api_key = ''
-    if choice['mode'] == 'model' or (choice['base_url'] and isinstance(config.get('base_url'),str) and
+    if choice['mode'].startswith('custom-'):
+        api_key=(config.get('registered_api_keys') or {}).get(choice['mode'],'')
+    elif choice['mode'] == 'model' or (choice['base_url'] and isinstance(config.get('base_url'),str) and
             config['base_url'].rstrip('/') == choice['base_url']):
         api_key = config.get('api_key', '')
     return choice['mode'], choice['base_url'], choice['model_id'], api_key
@@ -170,6 +212,8 @@ def _model_answer(app, body, system, user, *, max_tokens=8000, timeout=95):
 
 
 def run_workflow(app, store, body, progress=None):
+    from .clarifications import ClarificationRequired, task_clarification, needs_input
+    from .cancellation import check_cancelled
     if not isinstance(body, dict):
         raise ValueError('工作流要求必须是对象')
     def step(stage, detail='', status='running'):
@@ -189,10 +233,11 @@ def run_workflow(app, store, body, progress=None):
     mode, _, model, _ = _provider_config(app, body)
     body = {**body, 'mode': mode, 'provider': mode, 'model_id': model}
     title, description, kind, required, recipe = RECIPES[key]
-    if required and not docs:
-        raise ValueError('这项工作需要明确选择研究资料，尚未调用模型')
-    if key == 'compare' and len(docs) < 2:
-        raise ValueError('版本对照至少需要选择两份材料，尚未调用模型')
+    context = _project_context(store, project_id) if key == 'weekly' else ''
+    guidance = task_clarification('workflow', body, requires_sources=required or key=='weekly',
+        min_sources=2 if key=='compare' else 1, has_project_context=bool(context))
+    if guidance:
+        raise ClarificationRequired(guidance)
     coverage, sources, citations = [], [], []
     budget = max(300, 48000 // max(1, len(docs)))
     for index, doc in enumerate(docs, 1):
@@ -211,9 +256,6 @@ def run_workflow(app, store, body, progress=None):
         citations.append({'id': doc['id'] + ':' + tag, 'source_id': tag, 'document_id': doc['id'],
                           'title': doc['title'], 'quote': quote, 'chunk_id': chunk.get('id'),
                           'ordinal': chunk.get('ordinal', 1), 'page': chunk.get('page')})
-    context = _project_context(store, project_id) if key == 'weekly' else ''
-    if key == 'weekly' and not docs and not context:
-        raise ValueError('项目更新需要已有研究/任务/会议记录或选定材料，尚未调用模型')
     sender_name = body.get('sender_name') or ''
     if not isinstance(sender_name, str) or len(sender_name) > 100 or '\n' in sender_name or '\r' in sender_name:
         raise ValueError('邮件签名需为100字以内的单行文本')
@@ -231,6 +273,10 @@ def run_workflow(app, store, body, progress=None):
               '仅DD/IC材料按任务范围明确现有材料版本、研究问题与覆盖缺口，始终标注草稿性质，不把阶段性分析当最终投资决策。'
               '邮件和专家需求邮件遵守邮件用途，不套用IC/研究报告章节。'
               '采取简洁保守的建议措辞；邮件只拟稿不发送，法律审阅不替代专业意见。\n本次工作：' + recipe)
+    system += ('\n如果无法判断用户要交付什么，或缺少决定任务能否完成的必要条件，先问最多3个自然语言问题。'
+               '仅此时返回JSON {"status":"needs_input","message":"简短说明",'
+               '"questions":[{"id":"detail","label":"问题","hint":"可选提示"}]}，不要把问题当作交付正文。'
+               '已有信息和同一对话已确认的条件保留；普通资料缺口可在草稿中清楚标注，不为完善模板而反复追问。')
     if key in ('email', 'expert_request'):
         system += '\n覆盖/AI草稿免责声明不放进邮件正文；来源和需确认项放在邮件之后的独立部分，给定来源仍用[S#]标注。'
         if sender_name:
@@ -282,6 +328,14 @@ def run_workflow(app, store, body, progress=None):
     if not isinstance(answer, str) or len(answer) > 1_500_000:
         raise ValueError('模型未返回有效正文；没有保存草稿')
     answer = answer.strip()
+    if answer.startswith(('{','```json')):
+        from .valuation import parse_assumption_json
+        try:parsed = parse_assumption_json(answer)
+        except ValueError:parsed = {}
+        if parsed.get('status')=='needs_input':
+            check_cancelled()
+            raise ClarificationRequired(needs_input(str(parsed.get('message') or '还需要补充一个必要条件。'),
+                parsed.get('questions'),purpose='workflow'))
     step('check', '检查篇幅、格式、来源标签和覆盖声明')
     report = assess_output(key, message, answer, coverage, citations, finish_reason)
     reviews, repaired = [], False

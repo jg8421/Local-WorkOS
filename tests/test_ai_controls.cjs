@@ -205,6 +205,23 @@ test('plain Enter sends once while newlines, IME, repeats and disabled controls 
   key({}); assert.equal(submits, 2);
 });
 
+test('durable provider errors use friendly primary copy while scoped errors remain actionable', async () => {
+  const current={workflowJobs:[],workflowJobConnectionError:'',workflowStopBusy:new Set(),workflowStopErrors:new Map(),workflowRetryBusy:new Set()};
+  const sandbox={view:()=>current,esc:String,icon:()=>'',actionButton:label=>label,banner:(label,message)=>`<div class="banner">${label}: ${message}</div>`,workflowInfo:()=>({title:'交付草稿'}),workflowModelLabel:()=>'',projectName:()=>'',jobElapsed:()=>'',progressHtml:()=>'',activeWorkflowJob:()=>false};
+  vm.createContext(sandbox);
+  vm.runInContext(slice('  function friendlyAiError(', '  function showAiError(')+'\n'+slice('  function renderWorkflowJobs()', '  function updateWorkflowRegions()'),sandbox);
+  const job=error=>({id:'synthetic',status:'failed',error,retryable:true,message:'Synthetic job',document_ids:[],stages:[],created_at:new Date().toISOString()});
+  current.workflowJobs=[job('Synthetic upstream provider unavailable')];
+  let html=vm.runInContext('renderWorkflowJobs()',sandbox);
+  assert.ok(html.includes('暂时没有收到模型回复'));
+  assert.ok(html.includes('<summary>查看连接说明</summary>'));
+  assert.ok(html.includes('Synthetic upstream provider unavailable'));
+  current.workflowJobs=[job('本次资料范围已经改变，请重新选择资料后提交。')];
+  html=vm.runInContext('renderWorkflowJobs()',sandbox);
+  assert.ok(html.includes('本次资料范围已经改变，请重新选择资料后提交。'));
+  assert.ok(!html.includes('查看连接说明'));
+});
+
 (async () => {
   for (const { name, run } of tests) { await run(); console.log('PASS:', name); }
   console.log(`PASS: ${tests.length} AI controls scenarios`);

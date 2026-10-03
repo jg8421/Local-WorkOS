@@ -181,7 +181,13 @@ class ServerTests(unittest.TestCase):
             matching = [chunk for chunk in doc['chunks'] if chunk['ordinal'] == citation['ordinal']]
             self.assertTrue(matching)
             self.assertIn(citation['quote'], matching[0]['text'])
-        self.assertEqual(self.request('POST', '/api/ask', {**body, 'document_ids': []})[0], 400)
+        with patch.object(self.app, 'local_chat') as provider:
+            status, guidance = self.request('POST', '/api/ask', {**body, 'document_ids': []})
+            self.assertEqual(status, 200, guidance)
+            self.assertEqual(guidance['status'], 'needs_input')
+            self.assertTrue(guidance['questions'])
+            provider.assert_not_called()
+        self.assertEqual(self.app.stores['personal'].list('deliverables'), [])
         self.assertEqual(self.request('POST', '/api/ask', body, workspace='demo')[0], 400)
         self.assertEqual(self.request('POST', '/api/ask', {**body, 'mode': 'model'})[0], 400)
         self.assertEqual(self.request('POST', '/api/upload', {'name': 'bad.txt', 'base64': '!!!'})[0], 400)

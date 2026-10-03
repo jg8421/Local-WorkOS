@@ -18,6 +18,7 @@ from .workflows import RECIPES, _selected_documents, _project_context, provider_
 from .cancellation import CancellationToken, OperationRegistry, CancelledError, bind_token, check_cancelled
 from .ai_progress import new_execution, add_event, finish_execution, public_execution
 from .model_catalog import resolve_selection, selection_identity
+from .clarifications import ClarificationRequired
 
 STAGES = [('prepare', '准备资料'), ('generate', '生成正文'), ('check', '检查要求'),
           ('review', '复核内容'), ('repair', '修订问题'), ('save', '保存草稿')]
@@ -144,7 +145,7 @@ class WorkflowJobs:
         execution=state.setdefault('_execution',new_execution('workflow',state.get('model_id',''),state.get('quality_mode','fast'),
             status=state['status'],planned_stages=[key for key,_ in STAGES]))
         execution['stage_statuses']={item['key']:item['status'] for item in state['stages']}
-        if state['status'] in ('completed','cancelled','failed','interrupted'):finish_execution(execution,state['status'])
+        if state['status'] in ('completed','cancelled','failed','interrupted','needs_input'):finish_execution(execution,state['status'])
         state['updated_at'] = now()
         state['revision'] = state.get('revision', 0) + 1
         with self.db:
@@ -415,15 +416,19 @@ class WorkflowJobs:
                                     'signature':context['context_signature']}
                                 with self.db:self.db.execute('UPDATE jobs SET snapshot=? WHERE id=?',(_encoded(snapshot),job_id))
                             self._write(job_id,current)
-                    return run_workflow(self.app, frozen, prepared,
-                        progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
+                    try:
+                        return run_workflow(self.app, frozen, prepared,
+                            progress=lambda stage, detail='', status='running': self._progress(workspace, job_id, stage, detail, status))
+                    except ClarificationRequired as exc:
+                        return exc.report
                 result = (self.app.contextual_call(workspace, 'workflow', frozen, payload, execute)
                           if hasattr(self.app, 'contextual_call') else execute(payload))
             with self.lock:
                 if self.closed: return
                 state = self._row(workspace, job_id)[2]
                 if state['status'] not in ACTIVE: return
-                state.update(status='completed', stage='save', result=result, retryable=False, error='',
+                waiting=result.get('status')=='needs_input'
+                state.update(status='needs_input' if waiting else 'completed', stage=state['stage'] if waiting else 'save', result=result, retryable=False, error='',
                     conversation_id=result.get('conversation_id') or state.get('conversation_id',''))
                 for item in state['stages']:
                     if item['status'] == 'running': item['status'] = 'completed'

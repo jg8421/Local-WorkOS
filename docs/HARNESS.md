@@ -1,6 +1,12 @@
 # WorkOS quality harness
 
-Version 1.8.0, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
+Version 1.9.0, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
+
+## Understanding and missing conditions
+
+The selected model can classify a natural-language request before generation. This bounded planning call does not execute tools or read all project files. Explicit workflow selection can bypass it. Unclear intent and ordinary absent inputs return `needs_input`, with up to three questions and retained conditions, so the user can answer in ordinary language. A financial follow-up may confirm currency, unit, actual/forecast period, missing drivers or an inconsistent economic relationship; values, dates and unsupported assumptions are not invented or silently replaced.
+
+Continuation keeps the chosen model/project/purpose/source scope. A waiting-input round can be retained in conversation history but is not a completed artifact; a new submission uses a new request ID. This outcome is separate from authentication, stale-source, cancellation, malformed-provider and completion failures. The typed clarification exception is handled explicitly; arbitrary failures do not become reassuring questions. No incomplete draft is saved merely because the model asked something.
 
 ## Execution
 
@@ -28,4 +34,6 @@ Native Excel calculations remain Python/formula-based and require their dedicate
 
 ## One model selection across work
 
-All AI surfaces resolve the same reviewed service/model pair. GPT uses DSH, while the compatible models keep their exact requested IDs. Agent JSON actions, meeting drafts and valuation assumptions now support either route; changing model within a scoped conversation keeps that scope. No model choice bypasses evidence boundaries, cancellation or deterministic valuation formulas. Plain GPT action/meeting/assumption calls do not gain arbitrary DSH tools. Synthetic JSON probes verify bounded completion for the selected route, not general factual quality or independently authenticated upstream identity.
+All AI surfaces resolve the same reviewed service/model pair; new UI work defaults to WorkBuddy DeepSeek V4.1 Flash, preserving existing preferences. GPT uses DSH, while compatible models keep their exact requested IDs. Agent JSON actions, meeting drafts and valuation assumptions support either route; changing model within a scoped conversation keeps that scope. Registered compatible connections have separate canonical identities for endpoint + model ID, including when the upstream ID is the same. Definition files are private and persistent; API keys remain in process memory and use only their matching connection. Removal and stale identities reject rather than fall back.
+
+No model choice bypasses evidence boundaries, cancellation or deterministic valuation formulas. Plain GPT action/meeting/assumption calls do not gain arbitrary DSH tools. Synthetic JSON probes verify bounded completion for the selected route, not general factual quality or independently authenticated upstream identity. Neither the usage-guide read nor the catalog/registration APIs execute a model probe implicitly.

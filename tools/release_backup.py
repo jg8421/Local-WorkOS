@@ -21,12 +21,30 @@ def backup(data_dir, destination):
                 if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                     raise ValueError('Workspace backup integrity check failed')
         saved.append(name)
-    configuration = data_dir / 'project-artifacts.json'
-    if configuration.is_file():
+    configurations = []
+    for name in ('project-artifacts.json', 'custom-models.json'):
+        configuration = data_dir / name
+        if not configuration.is_file():
+            continue
         raw = configuration.read_bytes()
-        json.loads(raw)
-        (destination / configuration.name).write_bytes(raw)
-    (destination / 'manifest.json').write_text(json.dumps({'databases': saved, 'originals': 'retained-in-place', 'authentication': 'retained-in-place'}), encoding='utf-8')
+        parsed = json.loads(raw)
+        if name == 'custom-models.json':
+            if not isinstance(parsed, dict) or not isinstance(parsed.get('models'), list) or any(
+                    not isinstance(item, dict) for item in parsed['models']):
+                raise ValueError('Custom model definition backup structure is invalid')
+            # Definitions are private, but keys must never be copied even if a
+            # manually modified/older runtime file contains unexpected fields.
+            fields = ('mode', 'model_id', 'base_url', 'name', 'provider_label')
+            definitions = [{key: item[key] for key in fields if key in item} for item in parsed['models']]
+            if any(not isinstance(value, str) for item in definitions for value in item.values()):
+                raise ValueError('Custom model definition backup fields are invalid')
+            raw = json.dumps({'schema_version': 1,
+                              'models': definitions}, ensure_ascii=False, indent=2).encode('utf-8')
+        (destination / name).write_bytes(raw)
+        configurations.append(name)
+    (destination / 'manifest.json').write_text(json.dumps({'databases': saved, 'configurations': configurations,
+        'originals': 'retained-in-place', 'authentication': 'retained-in-place',
+        'model_keys': 'not-copied', 'model_status': 'not-copied'}), encoding='utf-8')
     return saved
 
 

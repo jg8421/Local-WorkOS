@@ -161,9 +161,13 @@ class WorkflowEndpointTests(unittest.TestCase):
     def test_local_mode_memory_and_invalid_id_reject_before_provider(self):
         memory = self.store.create('documents', {'title':'Synthetic memory', 'kind':'memory', 'content':'PRIVATE SENTINEL'})
         for body in (self.body(mode='local'), self.body(document_ids=[memory['id']]),
-                     self.body(request_id='bad'), self.body(document_ids=[])):
+                     self.body(request_id='bad')):
             with self.subTest(body=body):
                 self.assertEqual(self.request(body)[0], 400)
+        status, guidance = self.request(self.body(document_ids=[]))
+        self.assertEqual(status, 200, guidance)
+        self.assertEqual(guidance['status'], 'needs_input')
+        self.assertTrue(guidance['questions'])
         self.app.local_chat.assert_not_called()
         self.assertEqual(self.store.list('deliverables'), [])
 

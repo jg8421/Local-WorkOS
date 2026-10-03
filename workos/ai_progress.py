@@ -14,8 +14,8 @@ LABELS = {'pending':'等待请求', 'queued':'等待运行', 'prepare':'准备�
     'read':'读取选定资料', 'provider':'等待模型响应', 'generate':'生成正文', 'check':'检查输出',
     'review':'复核内容', 'repair':'修订问题', 'save':'保存结果', 'action':'执行已授权操作', 'archive':'同步项目交付物',
     'dsh':'运行受限研究工具', 'completed':'已完成', 'cancelled':'已停止', 'failed':'处理失败',
-    'interrupted':'服务中断'}
-TERMINAL = {'completed','cancelled','failed','interrupted'}
+    'interrupted':'服务中断', 'needs_input':'等待你补充信息'}
+TERMINAL = {'completed','cancelled','failed','interrupted','needs_input'}
 RANGES = {'ask':(8,60), 'actions':(15,180), 'agent':(15,180), 'meeting':(15,150),
           'valuation':(8,90), 'workflow':(20,120), 'plan':(1,5), 'model-check':(2,90)}
 
@@ -44,7 +44,7 @@ def new_execution(kind='ask',model_id='',quality_mode='fast',status='pending',pl
 
 def add_event(execution,stage,detail='',status='running'):
     if not isinstance(stage,str) or stage not in LABELS:raise ValueError('执行阶段无效；不能公开模型内部推理')
-    if status not in ('pending','queued','running','completed','skipped','cancelled','failed','interrupted'):
+    if status not in ('pending','queued','running','completed','skipped','cancelled','failed','interrupted','needs_input'):
         raise ValueError('执行阶段状态无效')
     text=safe_detail(detail)
     timestamp=time.time()
@@ -83,7 +83,7 @@ def public_execution(execution,status=None):
     if state.get('kind')=='workflow' and state.get('quality_mode')=='thorough':low,high=60,300
     if str(state.get('model_id','')).startswith('gpt-'):low,high=low*1.5,high*1.5
     if status in TERMINAL:
-        eta={'min_seconds':0,'max_seconds':0,'estimated':True,'basis':'工作已经结束'}
+        eta={'min_seconds':0,'max_seconds':0,'estimated':True,'basis':'等待补充后继续' if status=='needs_input' else '工作已经结束'}
     elif status in ('queued','pending'):
         eta={'min_seconds':None,'max_seconds':None,'estimated':True,'basis':'排队时间未知；尚未开始模型调用'}
     else:
