@@ -220,6 +220,10 @@ class Application:
    waiting=result.get('status')=='needs_input'
    assistant=(json.dumps({key:result[key] for key in ('message','questions','known_conditions','assumptions') if key in result},ensure_ascii=False)
               if waiting else str(result.get('answer') or result.get('summary') or result.get('message') or json.dumps(result.get('assumptions',{}),ensure_ascii=False)))
+   if waiting and purpose=='actions' and result.get('steps'):
+    receipts=[{'action':step.get('action'),'result':{key:step.get('result',{}).get(key) for key in ('id','document_id','summary','title') if key in step.get('result',{})}}
+              for step in result['steps'][:6]]
+    assistant+='\n已完成的操作回执（补充后不要重复执行，除非用户明确要求）：'+json.dumps(receipts,ensure_ascii=False)
    current={};output={};base={}
    if purpose=='workflow' and not waiting:
     record=result['deliverable'];current={'collection':'deliverables','id':record['id']}

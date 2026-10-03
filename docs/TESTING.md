@@ -2,6 +2,11 @@
 
 Validation uses synthetic fixtures and independent temporary databases. No original user memory or actual model API credentials are read.
 
+### 1.9.1 completed-action context across clarification, 2026-10-04
+
+- Action turns retain compact receipts from earlier committed steps when the model asks for missing conditions. The follow-up context carries saved record references so the next turn can recognize completed work and avoid repeating the save; full tool arguments/source bodies are excluded.
+- The action guidance suite passes10/10 checks. Its new actual HTTP regression verifies that a scoped follow-up prompt contains the exact prior record ID/title/action, excludes raw tool body/archive path, and completes without creating a second record. The full local Python release run passes472 checks (469 passed,3 Windows real-symlink permission skips); all41 Node groups pass. The final SOP also reruns Chrome and verifies deployment/push; remote CI is checked separately against the deployed revision.
+
 ### 1.9.0 conversational inputs and independent model connections, 2026-10-04
 
 - The full local Python release run passes471 checks (468 passed,3 skipped because this Windows account cannot create real symbolic links). Remote CI is checked independently after deployment and push.

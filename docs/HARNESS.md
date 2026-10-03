@@ -1,12 +1,14 @@
 # WorkOS quality harness
 
-Version 1.9.0, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
+Version 1.9.1, 2026-10-04. A harness is the execution surrounding a model: evidence access, tools, budgets, completion checks, review, repair and persistence. It improves inspectability and catches specific errors; it cannot guarantee factual truth or investment judgment.
 
 ## Understanding and missing conditions
 
 The selected model can classify a natural-language request before generation. This bounded planning call does not execute tools or read all project files. Explicit workflow selection can bypass it. Unclear intent and ordinary absent inputs return `needs_input`, with up to three questions and retained conditions, so the user can answer in ordinary language. A financial follow-up may confirm currency, unit, actual/forecast period, missing drivers or an inconsistent economic relationship; values, dates and unsupported assumptions are not invented or silently replaced.
 
 Continuation keeps the chosen model/project/purpose/source scope. A waiting-input round can be retained in conversation history but is not a completed artifact; a new submission uses a new request ID. This outcome is separate from authentication, stale-source, cancellation, malformed-provider and completion failures. The typed clarification exception is handled explicitly; arbitrary failures do not become reassuring questions. No incomplete draft is saved merely because the model asked something.
+
+In 1.9.1, action context retains compact receipts for steps committed before a clarification. The next round can identify records already created instead of repeating a save because the waiting-input message omitted them. Receipts describe completed actions and saved record references; they do not embed complete tool arguments or source bodies, expand source access or roll back committed work.
 
 ## Execution
 

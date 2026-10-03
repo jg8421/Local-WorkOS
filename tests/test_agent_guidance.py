@@ -119,6 +119,31 @@ class AgentGuidanceTests(unittest.TestCase):
         self.app.local_chat.assert_not_called()
         self.assertEqual(self.store.list('deliverables'), [])
 
+    def test_followup_model_context_contains_completed_receipt_without_raw_tool_arguments(self):
+        self.app.dsh_answer.side_effect = [
+            self.decide('create_note', {'title':'Synthetic completed note','body':'Synthetic raw note body.'}),
+            self.decide('run_workflow', {'workflow_key':'brief','message':'Review the evidence.'})]
+        status, first = self.post('/api/agent',self.action_body())
+        self.assertEqual(status,200,first)
+        self.assertEqual(first.get('status'),'needs_input',first)
+        note_id=first['steps'][0]['result']['id']
+        def finish(prompt,model):
+            self.assertIn(note_id,prompt)
+            self.assertIn('Synthetic completed note',prompt)
+            self.assertIn('create_note',prompt)
+            self.assertIn('已完成的操作回执',prompt)
+            self.assertNotIn('Synthetic raw note body.',prompt)
+            self.assertNotIn(str(self.project_folder),prompt)
+            return json.dumps({'action':'final','answer':'The prior note is already saved.'})
+        self.app.dsh_answer.side_effect=finish
+        status,second=self.post('/api/agent',self.action_body(message='Only confirm the prior saved note.',
+            conversation_id=first['conversation_id']))
+        self.assertEqual(status,200,second)
+        self.assertEqual(second['conversation_id'],first['conversation_id'])
+        self.assertEqual(second['steps'],[])
+        self.assertEqual(len(self.store.list('notes')),1)
+        self.assertEqual(self.store.get('notes',note_id)['body'],'Synthetic raw note body.')
+
 
 if __name__ == '__main__':
     unittest.main()
