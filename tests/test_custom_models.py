@@ -215,7 +215,9 @@ class CustomModelHttpTests(unittest.TestCase):
     def test_custom_service_failure_does_not_fallback_save_or_echo_upstream_error(self):
         self.transport('unused')
         entry = self.register()
-        before = self.app.stores['personal'].backup('personal')
+        store = self.app.stores['personal']
+        with patch('workos.store.now', return_value='2030-01-01T23:59:59+00:00'):
+            before = store.backup('personal')
 
         def failed(request, timeout=None):
             self.calls.append({'url': request.full_url, 'payload': json.loads(request.data),
@@ -227,7 +229,13 @@ class CustomModelHttpTests(unittest.TestCase):
         self.assertEqual(code, 400, result)
         self.assert_call(entry, 'SYNTHETIC_A_KEY')
         self.assertNotIn('UPSTREAM_PRIVATE_ERROR_SENTINEL', json.dumps(result))
-        self.assertEqual(self.app.stores['personal'].backup('personal'), before)
+        # Cross a deterministic clock boundary while preserving every stored
+        # record and the backup's format/version/workspace scope checks.
+        with patch('workos.store.now', return_value='2030-01-02T00:00:00+00:00'):
+            after = store.backup('personal')
+        self.assertNotEqual(after['exported_at'], before['exported_at'])
+        self.assertEqual({key: value for key, value in after.items() if key != 'exported_at'},
+                         {key: value for key, value in before.items() if key != 'exported_at'})
 
     def test_durable_custom_job_uses_exact_registered_endpoint_and_keeps_secrets_out_of_snapshot(self):
         self.transport('Synthetic research result, needs verification. [S1]')
