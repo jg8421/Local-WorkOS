@@ -52,13 +52,23 @@ def _workbook(a, *, preview=None):
     runtime = Path.home()/'.cache'/'codex-runtimes'/'codex-primary-runtime'/'dependencies'/'node'
     node = Path(os.environ.get('WORKOS_ARTIFACT_NODE') or runtime/'bin'/'node.exe')
     modules = Path(os.environ.get('WORKOS_ARTIFACT_MODULES') or runtime/'node_modules')
-    if not node.is_file() or not (modules/'@oai'/'artifact-tool').exists():
-        raise ExcelUnavailable('Excel工作簿生成组件尚未配置；条件已保留，请在本机完成运行环境配置后重试')
+    artifact_available=node.is_file() and (modules/'@oai'/'artifact-tool').exists()
+    if not artifact_available:
+        try: import openpyxl
+        except ImportError as exc:
+            raise ExcelUnavailable('工作簿生成组件尚未配置；请用完整便携包或在部署向导启用Excel导出。条件已保留。') from exc
     report_progress('generate', '正在建立投资人现金流和可编辑Excel公式')
     with tempfile.TemporaryDirectory(prefix='workos-return-') as directory:
         folder=Path(directory);input_=folder/'inputs.json';output=folder/'returns.xlsx';receipt=folder/'calculated.json'
         input_.write_text(json.dumps({'assumptions':a,'result':result},ensure_ascii=False,allow_nan=False),encoding='utf-8')
-        _run([str(node),str(Path(__file__).with_name('return_workbook.mjs')),str(input_),str(output),str(modules), *([str(preview)] if preview else [])])
+        if artifact_available:
+            _run([str(node),str(Path(__file__).with_name('return_workbook.mjs')),str(input_),str(output),str(modules), *([str(preview)] if preview else [])])
+            author_name='artifact-tool'
+        else:
+            from .portable_return_workbook import author
+            check_cancelled()
+            author(a,result,output)
+            author_name='portable-openpyxl'
         report_progress('generate', 'Microsoft Excel正在重算MOC和实际日期XIRR')
         _run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
               str(Path(__file__).with_name('return_excel.ps1')),'-WorkbookPath',str(output),'-ResultPath',str(receipt)])
@@ -70,6 +80,7 @@ def _workbook(a, *, preview=None):
                 raise ExcelUnavailable('Excel结果与独立现金流校验不一致；未保存，请核对条件后重试')
             result[key]=actual
         result['moc']=result['moic'];result['calculation_engine']='Microsoft Excel · XIRR';result['excel_verified']=True
+        result['workbook_author']=author_name
         result['answer']=f"MOC {result['moic']:.2f}×；IRR {result['irr']:.1%}。" if result['irr'] is not None else f"MOC {result['moic']:.2f}×；IRR无有限XIRR解。"
         check_cancelled()
         return result, output.read_bytes()

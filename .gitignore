@@ -44,3 +44,5 @@ model-status.json
 model-status.tmp
 custom-models.json
 custom-models.tmp
+work/
+portable-dist/

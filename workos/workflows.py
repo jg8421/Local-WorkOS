@@ -283,6 +283,8 @@ def run_workflow(app, store, body, progress=None):
         system += '\n覆盖/AI草稿免责声明不放进邮件正文；来源和需确认项放在邮件之后的独立部分，给定来源仍用[S#]标注。'
         if sender_name:
             system += '\n用户已明确的邮件落款姓名：' + sender_name
+    from .industry_playbooks import guidance as industry_guidance
+    system += industry_guidance(key, message)
     user = ('用户要求：\n' + message + '\n\n覆盖信息：\n' +
             '\n'.join(f'[{item["source_id"]}] {item["excerpt_chars"]}/{item["total_chars"]}字，' +
                       ('仅摘录' if item['truncated'] else '全部已提取文字') for item in coverage) +
@@ -323,6 +325,17 @@ def run_workflow(app, store, body, progress=None):
         model_name, mode = DSH_MODELS[model][0] + ' via DSH', 'dsh'
         if harness.get('coverage'): coverage = harness['coverage']
         finish_reason = 'stop' if harness.get('completion_verified') else None
+    elif quality_mode == 'thorough' and docs and hasattr(app, 'evidence_harness_answer'):
+        native_user = ('用户要求：\n' + message +
+                       ('\n已有项目记录（不是当周变化的证明）：\n' + context if context else ''))
+        if body.get('_context_text'): native_user += '\n同一工作对话历史（旧稿未经核验）：\n' + body['_context_text']
+        if body.get('_experience_text'): native_user += '\n用户确认的项目工作偏好（不当作事实证据）：\n' + body['_experience_text']
+        if parent: native_user += '\n按最新要求修订当前编辑稿；它不是独立证据，旧引用需用本轮来源重新核验：\n' + base
+        answer, model_name, harness = app.evidence_harness_answer(body, system, native_user, docs, coverage,
+            lambda event: step('generate', event.get('detail') or '正在查阅选定资料'))
+        mode = 'model'
+        if harness.get('coverage'): coverage = harness['coverage']
+        finish_reason = getattr(getattr(app, 'completion_meta', None), 'finish_reason', None)
     else:
         answer, model_name, mode = _model_answer(app, body, system, user)
         finish_reason = getattr(getattr(app, 'completion_meta', None), 'finish_reason', None)
@@ -342,6 +355,26 @@ def run_workflow(app, store, body, progress=None):
     report = assess_output(key, message, answer, coverage, citations, finish_reason)
     reviews, repaired = [], False
     # Review is bounded to actual supplied excerpts; a clean review is advisory.
+    if harness.get('coverage_basis') == 'tool_read_ranges':
+        # Review and citation anchors must reflect actual tool reads, rather than
+        # the preliminary excerpts that the tool-driven model never received.
+        by_tag = {'S'+str(index): doc for index, doc in enumerate(docs, 1)}
+        read_evidence, read_citations = [], []
+        for tag, doc in by_tag.items():
+            merged = []
+            intervals = sorted((row['start'], row['end']) for row in harness.get('read_ranges', []) if row['source_id'] == tag)
+            for start, end in intervals:
+                if merged and start <= merged[-1][1]: merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                else: merged.append((start, end))
+            if not merged: continue
+            pieces = [doc['content'][start:end] for start, end in merged]
+            read_evidence.append('['+tag+'] '+doc['title']+'\n'+'\n[未连续读取的部分省略]\n'.join(pieces))
+            quote = pieces[0].strip()[:180]
+            candidates = [row for row in doc.get('chunks', []) if quote and quote in row.get('text', '')]
+            chunk = candidates[0] if len(candidates) == 1 else {}
+            read_citations.append({'id': doc['id']+':'+tag, 'source_id': tag, 'document_id': doc['id'],
+                'title': doc['title'], 'quote': quote, 'chunk_id': chunk.get('id'), 'ordinal': chunk.get('ordinal'), 'page': chunk.get('page')})
+        sources, citations = read_evidence, read_citations
     review_evidence = '\n\n'.join(sources) + ('\n\n已有项目记录：\n' + context if context else '')
     review_scope = '本次提供的资料摘录及项目记录；没有联网或独立事实核验'
     if len(review_evidence) > 48000:
@@ -362,11 +395,19 @@ def run_workflow(app, store, body, progress=None):
             import json
             step('repair', '按明确问题修订一次，并重新检查及复核')
             repairs = repair_brief(report) + '\n模型复核问题（仅作修订线索）：\n' + json.dumps(checked['findings'], ensure_ascii=False)
-            repair_user = user + '\n\n原正文（不可信草稿）：\n' + answer + '\n\n' + repairs + '\n返回修订后的完整正文。'
+            repair_context = user
+            if harness.get('coverage_basis') == 'tool_read_ranges':
+                repair_context = ('用户要求：\n' + message + '\n\n本轮实际已读证据（未包含其他范围）：\n' + review_evidence)
+                if body.get('_context_text'): repair_context += '\n本轮工作历史（旧稿不是独立证据）：\n' + body['_context_text']
+                if parent: repair_context += '\n用户当前编辑原稿（不是独立证据）：\n' + base
+            repair_user = repair_context + '\n\n原正文（不可信草稿）：\n' + answer + '\n\n' + repairs + '\n返回修订后的完整正文。'
             answer, model_name, mode = _model_answer(app, body, system, repair_user)
             if not isinstance(answer, str) or len(answer) > 100000:
                 raise ValueError('修订正文超过可复核范围；未保存草稿，请缩小任务范围')
             answer = answer.strip()
+            if harness.get('coverage_basis') == 'tool_read_ranges':
+                from .evidence_harness import check_repaired_scope
+                harness = check_repaired_scope(harness, answer)
             repaired = True
             step('check', '重新检查修订正文')
             finish_reason = 'stop' if body.get('mode') == 'dsh' else getattr(getattr(app, 'completion_meta', None), 'finish_reason', None)

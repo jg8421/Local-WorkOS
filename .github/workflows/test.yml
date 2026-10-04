@@ -41,3 +41,5 @@ jobs:
         run: |
           node tests/test_api_client.cjs
           node tests/test_ai_controls.cjs
+          node tests/test_file_operations.cjs
+          node tests/test_startup_reads.cjs

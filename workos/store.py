@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -23,7 +24,7 @@ FIELDS = {
  'meetings': {'title','project_id','date','participants','transcript','summary','experts','matrix','contents'},
  'notes': {'title','project_id','body','status','document_id','source_quote'},
  'deliverables': {'title','project_id','kind','body'},
- 'activity': {'title','kind','project_id'},
+ 'activity': {'title','kind','project_id','collection','record_id','action'},
 }
 for _collection_name in ORGANIZED_COLLECTIONS:
  FIELDS[_collection_name] |= ORGANIZATION_FIELDS
@@ -45,7 +46,7 @@ DEFAULTS = {
  'meetings':dict(project_id='',date='',participants='',transcript='',summary='',experts=[],matrix={},contents=[]),
  'notes':dict(project_id='',body='',status='待核实',document_id='',source_quote=''),
  'deliverables':dict(project_id='',kind='自定义',body=''),
- 'activity':dict(project_id='',kind='change'),
+ 'activity':dict(project_id='',kind='change',collection='',record_id='',action=''),
 }
 for _collection_name in ORGANIZED_COLLECTIONS:
  DEFAULTS[_collection_name].update(EMPTY_ORGANIZATION)
@@ -70,6 +71,7 @@ class Store:
   self.path=Path(path)
   self.path.parent.mkdir(parents=True,exist_ok=True)
   self.lock=threading.RLock()
+  self.activity_observer=None
   self.db=sqlite3.connect(self.path,check_same_thread=False,timeout=20)
   self.db.execute('PRAGMA journal_mode=WAL')
   self.db.execute('CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(collection,id))')
@@ -256,18 +258,21 @@ class Store:
   record['id']=data.get('id',str(uuid.uuid4())) if internal else str(uuid.uuid4())
   record['created_at']=data.get('created_at',now()) if internal else now()
   record['updated_at']=data.get('updated_at',now()) if internal else now()
+  activity=None
   with self.lock,self.db:
    self._validate(col,record,internal)
    self._organization(col,record,data,internal=internal)
    self._validate(col,record,internal)
    self.db.execute('INSERT INTO records VALUES (?,?,?)',(col,record['id'],ensure_json(record)))
    if col=='tasks' and record.get('project_id') and record.get('task_group_source')=='manual':self._organize_existing(record['project_id'])
-   if log and col!='activity': self._log('创建 '+record.get('name',record.get('title','')),record.get('project_id',''))
+   if log and col!='activity':activity=self._log('创建 '+record.get('name',record.get('title','')),record['id'] if col=='projects' else record.get('project_id',''),col,record['id'],'create')
+  self._notify_activity(activity)
   return record
 
  def update(self,col,id,data):
   if not isinstance(data,dict): raise ValueError('更新必须是对象')
   if set(data)&{'id','created_at','updated_at'}: raise ValueError('不能修改系统字段')
+  activity=None
   with self.lock,self.db:
    current=self.get(col,id)
    updated={**current,**data,'updated_at':now()}
@@ -287,7 +292,8 @@ class Store:
    if col=='tasks' and (updated.get('task_group_source')=='manual' or current.get('task_group_source')=='manual'):
     for project_id in {current.get('project_id'),updated.get('project_id')}:
      if project_id:self._organize_existing(project_id)
-   if col!='activity': self._log('更新 '+updated.get('name',updated.get('title','')),updated.get('project_id',''))
+   if col!='activity':activity=self._log('更新 '+updated.get('name',updated.get('title','')),updated['id'] if col=='projects' else updated.get('project_id',''),col,id,'update')
+  self._notify_activity(activity)
   return updated
 
  def _validate_project_reassociation(self,col,id,updated):
@@ -302,6 +308,7 @@ class Store:
      raise ValueError('来源资料仍被原项目交付物引用，请先调整关联')
 
  def delete(self,col,id):
+  activity=None
   with self.lock,self.db:
    record=self.get(col,id)
    if col in ('projects','documents','meetings'):
@@ -316,13 +323,23 @@ class Store:
     raise ValueError('该草稿仍有修订版本，不能删除原稿')
    self.db.execute('DELETE FROM records WHERE collection=? AND id=?',(col,id))
    if col=='tasks' and record.get('project_id') and record.get('task_group_source')=='manual':self._organize_existing(record['project_id'])
-   if col!='activity': self._log('删除 '+record.get('name',record.get('title','')),'')
+   if col!='activity':activity=self._log('删除 '+record.get('name',record.get('title','')),record['id'] if col=='projects' else record.get('project_id',''),col,id,'delete')
+  self._notify_activity(activity)
   return {'deleted':True}
 
- def _log(self,title,project_id=''):
-  record={'id':str(uuid.uuid4()),'created_at':now(),'updated_at':now(),'title':title,'kind':'change','project_id':project_id}
+ def _log(self,title,project_id='',collection='',record_id='',action=''):
+  record={'id':str(uuid.uuid4()),'created_at':now(),'updated_at':now(),'title':title,'kind':'change','project_id':project_id,
+          'collection':collection,'record_id':record_id,'action':action}
   self.db.execute('INSERT INTO records VALUES (?,?,?)',('activity',record['id'],ensure_json(record)))
   self.db.execute("DELETE FROM records WHERE collection='activity' AND rowid NOT IN (SELECT rowid FROM records WHERE collection='activity' ORDER BY rowid DESC LIMIT 200)")
+  return record
+
+ def _notify_activity(self,activity):
+  # Only a committed mutation emits a receipt. Observer failure must never
+  # turn a successful user save into an error or trigger duplicate generation.
+  if activity is not None and self.activity_observer is not None:
+   try:self.activity_observer(activity)
+   except Exception:logging.warning('Project execution receipt could not be archived; committed record retained')
 
  def state(self):
   data={col:self.list(col) for col in COLLECTIONS}

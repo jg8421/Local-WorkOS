@@ -33,6 +33,7 @@ function harness(implementation = async () => ({})) {
     StaleRequestError: class extends Error { constructor() { super('Workspace changed'); this.name = 'StaleRequestError'; } },
     view: () => current,
     api: async (url, options) => { calls.push({ url, options }); return implementation(url, options, calls); },
+    taskStatusRead: async url => { calls.push({ url }); return implementation(url, undefined, calls); },
     $: selector => selector === '#ai-run-controls' ? region : null,
     $$: () => [],
     esc: value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character])),

@@ -116,7 +116,9 @@ sys.exit(1 if mode=='failed' else 0)
         # Fake provider is Python; skip the Node-only lifecycle launcher in these protocol tests.
         original = subprocess.Popen
         def execute(argv, **options):
-            return original([argv[0],argv[2],*argv[3:]],**options)
+            # Preserve taskkill's owned PID/tree arguments on Windows cleanup.
+            actual = [argv[0],argv[2],*argv[3:]] if len(argv)>2 and Path(argv[1]).name=='launcher.mjs' else argv
+            return original(actual,**options)
         with patch('workos.dsh_harness.subprocess.Popen',side_effect=execute):
             return run(app,'Synthetic task','synthetic-model',MODELS,**kwargs)
 
@@ -145,6 +147,44 @@ sys.exit(1 if mode=='failed' else 0)
         with patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':'timeout'}),self.assertRaisesRegex(ValueError,'工作已取消'):
             self.run_fake(app,progress_callback=lambda event:False)
         self.assertFalse(app.dsh_lock.locked())
+
+    @unittest.skipUnless(os.name == 'nt', 'Real Windows file-handle cleanup regression')
+    def test_cancel_with_locked_event_reader_preserves_cancellation_and_releases_lock(self):
+        app = self.fake_app()
+        temporary, readers = [], []
+        result = None
+
+        def owned_directory(**options):
+            instance = TemporaryDirectory(dir=self.root, **options)
+            temporary.append(instance)
+            return instance
+
+        def stop(event):
+            if event.get('event') != 'heartbeat':
+                return None
+            events = Path(temporary[0].name)/'events.jsonl'
+            readers.append(events.open('rb'))
+            # Prove this is a real OS sharing violation, not a mocked cleanup.
+            with self.assertRaises(PermissionError):
+                events.unlink()
+            return False
+
+        try:
+            with patch.dict(os.environ,{'WORKOS_SYNTHETIC_DSH':'timeout'}), \
+                 patch('workos.dsh_harness.tempfile.TemporaryDirectory',side_effect=owned_directory), \
+                 self.assertRaisesRegex(ValueError,'工作已取消'):
+                result = self.run_fake(app,progress_callback=stop)
+            self.assertIsNone(result, 'Cancelled work must not return a draft')
+            self.assertEqual(len(readers),1)
+            self.assertFalse(app.dsh_lock.locked())
+        finally:
+            for reader in readers:
+                reader.close()
+            for instance in temporary:
+                owned = Path(instance.name).resolve()
+                self.assertEqual(owned.parent,self.root.resolve())
+                instance.cleanup()  # Reclaim only this test-owned directory.
+                self.assertFalse(owned.exists())
 
     def test_cancellation_during_delayed_lock_acquisition_never_starts_process(self):
         app = self.fake_app()

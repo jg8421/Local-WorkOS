@@ -100,6 +100,13 @@ class Application:
   from .project_artifacts import ProjectArtifacts
   self.conversations=Conversations(self.data_dir/'conversations.sqlite3',stores=self.stores)
   self.artifacts=ProjectArtifacts(self.data_dir)
+  from .project_experience import ProjectExperience
+  self.experience=ProjectExperience(self.data_dir/'project-learning.sqlite3',self.stores,self.conversations)
+  for workspace,store in self.stores.items():
+   store.activity_observer=lambda activity,scope=workspace:self.experience.observe_activity(scope,activity)
+   for activity in reversed(store.list('activity')):
+    try:self.experience.observe_activity(workspace,activity)
+    except Exception:logging.warning('An existing project activity could not be archived; original record retained')
 
  def jobs(self):
   from .jobs import WorkflowJobs
@@ -118,6 +125,7 @@ class Application:
   self.begin_shutdown()
   if self._jobs is not None:self._jobs.close()
   self.conversations.close()
+  self.experience.close()
   self.artifacts.close()
   for store in self.stores.values():store.close()
 
@@ -207,6 +215,11 @@ class Application:
    raise ValueError('对话在排队期间已发生新轮次，请基于最新上下文重新创建任务')
   prepared.update(project_id=project_id,conversation_id=conversation_id,_context=context)
   prepared['_context_text']='\n\n'.join(('用户：' if item['role']=='user' else '前轮草稿：')+item['content'] for item in context.get('messages',[]))
+  if project_id:
+   learned=self.experience.context(workspace,project_id,purpose,source_ids)
+   prepared['_experience_text']=learned['text']
+   if learned['text']:
+    prepared['_context_text']+='\n\n本项目已确认工作偏好/有本轮来源支持的口径（最新直接要求优先，不是新增事实证据）：\n'+learned['text']
   report_progress('prepare','已载入当前对话上下文和明确选择的资料')
   token=getattr(store,'token',None)
   if token:
@@ -237,23 +250,38 @@ class Application:
    elif purpose=='plan':output={key:result[key] for key in ('question','route','workflow_key','method') if key in result}
    if waiting:
     output.update({key:result[key] for key in ('status','message','purpose','questions','known_conditions','missing') if key in result})
+   if token:
+    with token.lock:
+     output['execution_steps']=[{key:row.get(key,'') for key in ('stage','detail','status')} for row in token.execution.get('events',[])][-50:]
    if purpose=='valuation' and result.get('deliverable_id'):current={'collection':'deliverables','id':result['deliverable_id']}
    with (token.guard() if token else nullcontext()):
-    self.conversations.append(workspace,conversation_id,user,assistant,status='needs_input' if waiting else 'completed',request_id=request_id,
+    turn=self.conversations.append(workspace,conversation_id,user,assistant,status='needs_input' if waiting else 'completed',request_id=request_id,
      source_ids=source_ids,parent_artifact={'collection':'deliverables','id':body['revision_of']} if body.get('revision_of') else {},
      current_artifact=current,base_snapshot=base,output_snapshot=output)
     if token:token.status='completed';token.completed_metadata.update(conversation_id=conversation_id)
+   if project_id:
+    try:self.experience.observe_turn(workspace,conversation_id,turn['id'])
+    except Exception:logging.warning('Project experience could not record this completed turn; saved work retained')
    result.update(conversation_id=conversation_id,context={'turn_count':conversation.get('turns_total',0)+1,
     'truncated':context.get('truncated',False),'notice':context.get('warning',''),'source_ids':source_ids})
    if current:
     report_progress('archive','正在把新版本归档到项目文件夹')
     result['archive']=self.archive_record(workspace,current['collection'],self.stores[workspace].get(current['collection'],current['id']))
    return result
-  except Exception:
+  except Exception as exc:
    # Failed/cancelled work is visible, but never becomes successful model context.
    if not self.stopping:
-    self.conversations.append(workspace,conversation_id,user,'本轮未完成，原记录保留。',
-     status='cancelled' if token and token.event.is_set() else 'failed',request_id=request_id,source_ids=source_ids)
+    failure_output={}
+    if token:
+     with token.lock:
+      failure_output['execution_steps']=[{key:row.get(key,'') for key in ('stage','detail','status')} for row in token.execution.get('events',[])][-50:]
+    if isinstance(exc,CancelledError):
+     failure_output['steps']=[{'action':row.get('action'),'result':{key:row.get('result',{}).get(key) for key in ('id','title','document_id') if key in row.get('result',{})}} for row in exc.steps[:6]]
+    turn=self.conversations.append(workspace,conversation_id,user,'本轮未完成，原记录保留。',
+     status='cancelled' if token and token.event.is_set() else 'failed',request_id=request_id,source_ids=source_ids,output_snapshot=failure_output)
+    if project_id:
+     try:self.experience.observe_turn(workspace,conversation_id,turn['id'])
+     except Exception:logging.warning('Project experience could not record this interrupted turn')
    raise
 
  def dsh_public(self):
@@ -601,10 +629,36 @@ class Application:
   check_cancelled()
   return result
 
+ def evidence_harness_answer(self,body,system,user,docs,coverage,progress_callback=None):
+  from .evidence_harness import run
+  from .workflows import _model_answer
+  return run(lambda instructions,request,timeout:_model_answer(self,body,instructions,request,max_tokens=10000,timeout=timeout),
+             system,user,docs,coverage,progress_callback)
+
 
  def ai_public(self):
   with self.ai_lock:
    return {'configured':bool(self.ai['base_url'] and self.ai['model']),'base_url':self.ai['base_url'],'model':self.ai['model'],'presets':[{'id':key,'label':value['label'],'base_url':value['base_url'],'models':[{'id':m[0],'name':m[1],'context':m[2]} for m in value['models']]} for key,value in LOCAL_AI_PRESETS.items()],'default_model':LOCAL_DEFAULT_MODEL}
+
+ def readiness_public(self):
+  from tools.deployment_preflight import readiness
+  result=readiness(ROOT)
+  catalog=self.model_catalog_public()
+  default=next((item for group in catalog['groups'] for item in group['models'] if item['selection_id']==catalog['default_selection_id']),{})
+  for item in result['checks']:
+   if item['id']=='models':
+    item.update(ready=default.get('status')=='verified',status=default.get('status','not_checked'),
+     detail='默认模型检测已通过' if default.get('status')=='verified' else '核心已可启动；在设置检测默认模型或添加兼容服务后开始AI工作')
+  return result
+
+ def harness_public(self):
+  from .evidence_harness import READ_BUDGET,TOOL_BUDGET,ROUND_BUDGET
+  from .industry_playbooks import paths
+  return {'engine':'WorkOS','default_model':'WorkBuddy DeepSeek V4.1 Flash',
+   'tools':{'names':['workos_sources','workos_read_source','workos_find_evidence','workos_check_draft'],
+    'read_budget':READ_BUDGET,'tool_budget':TOOL_BUDGET,'round_budget':ROUND_BUDGET},
+   'dsh':{'available':self.dsh_available},'memory':{'project_scoped':True,'user_preferences':True},'work_paths':paths(),
+   'limits':['资料工具限本轮选定来源，不调用任意命令或其他项目','复核可发现特定问题，不等于事实认证','项目经验积累工作规则，不训练模型权重']}
 
  def local_chat(self,base_url,model,system,user,max_tokens=1600,timeout=65,api_key_snapshot=None):
   from .cancellation import report_progress
@@ -621,9 +675,12 @@ class Application:
   except urllib.error.HTTPError as exc:
    check_cancelled()
    raise ValueError('模型接口返回 '+str(exc.code)+'；请检测所选模型或确认服务已启动且模型已开通。') from exc
-  except (urllib.error.URLError,TimeoutError,OSError) as exc:
+  except TimeoutError as exc:
    check_cancelled()
-   raise ValueError('无法连接本机模型服务；请确认本地模型桥接进程在运行。') from exc
+   raise ValueError('所选模型服务未及时响应，输入已保留；请重试或在设置中检测模型连接。') from exc
+  except (urllib.error.URLError,OSError) as exc:
+   check_cancelled()
+   raise ValueError('无法连接所选模型服务，输入已保留；请在设置中检查服务地址、网络和连接状态。') from exc
   check_cancelled()
   report_progress('check','已收到模型回复，正在检查格式与来源')
   if len(raw)>2_000_000:raise ValueError('模型返回内容过大')
@@ -816,6 +873,8 @@ class Handler(BaseHTTPRequestHandler):
   if isinstance(exc,CsrfExpired):return self.respond({'error':str(exc),'code':'csrf_expired'},403)
   if isinstance(exc,CancelledError):return self.respond({'error':str(exc),'code':'request_cancelled','steps':exc.steps},409)
   if isinstance(exc,OperationConflict):return self.respond({'error':str(exc),'code':'operation_conflict'},409)
+  if isinstance(exc,ImportError) and str(getattr(exc,'name','') or '').split('.')[0] in ('docx','pptx','openpyxl','lxml','PIL','pypdf','jwt','cryptography'):
+   return self.respond({'error':'这台机器尚缺该功能的组件。正文和条件已保留，可先导出HTML，或使用完整版便携包后重试。','code':'needs_setup'},400)
   if isinstance(exc,PermissionError):self.respond({'error':str(exc)},403)
   elif isinstance(exc,OriginalUnavailable):self.respond({'error':exc.args[0],'code':'original_unavailable'},404)
   elif isinstance(exc,KeyError):self.respond({'error':'记录不存在'},404)
@@ -836,6 +895,11 @@ class Handler(BaseHTTPRequestHandler):
     return self.respond(boot)
    if path=='/api/models':return self.respond(self.app.model_catalog_public())
    if path=='/api/models/custom':return self.respond({'models':self.app.custom_models.public()})
+   if path=='/api/system/readiness':return self.respond(self.app.readiness_public())
+   if path=='/api/harness':return self.respond(self.app.harness_public())
+   if path=='/api/experience/backup':return self.respond(self.app.experience.backup(mode),filename='WorkOS_'+mode+'_project-experience.json')
+   match=re.fullmatch(r'/api/projects/([^/]+)/experience',path)
+   if match:return self.respond(self.app.experience.status(mode,match.group(1),purpose=query.get('purpose',[None])[0]))
    if path=='/api/guidance':return self.respond({'title':'使用指南与案例','content':(ROOT/'docs'/'USAGE_GUIDE.md').read_text(encoding='utf-8')})
    if path=='/api/agent/tools':
     from .agent import AGENT_TOOLS
@@ -955,10 +1019,20 @@ class Handler(BaseHTTPRequestHandler):
    mode=self.workspace();store=self.app.stores[mode]
    body=self.json_body() if method!='DELETE' else {}
    custom_match=re.fullmatch(r'/api/models/custom/([a-f0-9]{16})',path)
+   experience_match=re.fullmatch(r'/api/projects/([^/]+)/experience/([a-f0-9]{32})',path)
+   if experience_match:
+    project_id,entry_id=experience_match.groups()
+    if method=='DELETE':self.app.experience.delete(mode,project_id,entry_id);return self.respond({'removed':True})
+    if method in ('PATCH','PUT'):return self.respond({'entry':self.app.experience.edit(mode,project_id,entry_id,body)})
    if method=='DELETE' and custom_match:
     self.app.custom_models.remove(custom_match.group(1));self.app.refresh_custom_models()
     return self.respond({'removed':True,'models':self.app.model_catalog_public()})
    if method=='POST':
+    if path=='/api/experience/restore':return self.respond(self.app.experience.restore(mode,body))
+    match=re.fullmatch(r'/api/projects/([^/]+)/experience/settings',path)
+    if match:return self.respond({'settings':self.app.experience.update_settings(mode,match.group(1),body.get('enabled'))})
+    match=re.fullmatch(r'/api/projects/([^/]+)/experience',path)
+    if match:return self.respond({'entry':self.app.experience.create(mode,match.group(1),body)},201)
     if path=='/api/models/custom':
      model=self.app.custom_models.add(body);self.app.refresh_custom_models()
      return self.respond({'model':model,'models':self.app.model_catalog_public()})

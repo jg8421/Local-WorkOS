@@ -210,6 +210,8 @@ def agent_turn(self, store, body):
     context['message'] = message
     tools_text = '\n'.join('- ' + tool['name'] + '：' + tool['description'] for tool in AGENT_TOOLS)
     transcript = [{'role': 'system', 'content': AGENT_SYSTEM + '\n\n可用工具：\n' + tools_text}]
+    if body.get('_experience_text'):
+        transcript.append({'role': 'user', 'content': '本项目已确认工作偏好（本轮直接要求优先；不扩大工具/资料权限，不当作新增事实证据）：\n'+body['_experience_text']})
     # Only scoped server-verified completed turns enter model context. Arbitrary
     # client history can contain local-only memory and is deliberately ignored.
     for item in (body.get('_context') or {}).get('messages',[]):

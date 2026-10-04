@@ -10,12 +10,18 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
+const {windowsProcessState,releaseExitedChild,releaseChildReferences}=require('./browser_process_lifecycle.cjs');
 const root = path.resolve(__dirname, '..');
 const chromeExecutable = process.env.WORKOS_TEST_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const checkFilter=process.env.WORKOS_TEST_FILTER?new RegExp(process.env.WORKOS_TEST_FILTER):null;
 const failures = [], requests = [], originalRequests = [], runtimeErrors = [], interceptionErrors = [];
+const browserTraffic = [];
+const pausedRequests = new Map();
+let serverOutput = '';
 const workflowJobs = new Map(), workflowRequestKeys = new Map(), workflowCancelTombstones = new Set();
 const auxiliaryModelMocks = new Map();
+const fileOperationMocks = new Map();
 const operationCancelFailures = new Map();
 const mockConversations=new Map(),mockOperations=new Map(),mockArchives=new Map(),mockBindings=new Map();
 const customModelConfigs=new Map();
@@ -35,7 +41,13 @@ async function freePort() {
   const port = listener.address().port; await new Promise(resolve => listener.close(resolve)); return port;
 }
 function start(executable, args, options = {}) {
+  const beforeSpawn=Date.now();
   const child = spawn(executable, args, { cwd: root, stdio: 'ignore', windowsHide: true, ...options });
+  const afterSpawn=Date.now();
+  if(process.platform==='win32'&&child.pid)child.nativeIdentity=windowsProcessState(child.pid).then(state=>{
+    if(state.status==='active'&&(state.created_at_ms<beforeSpawn-1000||state.created_at_ms>afterSpawn+1000))throw Error('Created process identity did not match its spawn');
+    return state;
+  }).catch(error=>({status:'unverified',error:error.message}));
   child.startError = null;
   child.on('error', error => { child.startError = error; });
   return child;
@@ -67,9 +79,16 @@ class CDP {
       if (message.id) {
         const entry = this.pending.get(message.id); if (!entry) return;
         this.pending.delete(message.id); clearTimeout(entry.timer);
+        if(entry.trace)Object.assign(entry.trace,{status:message.error?'protocol_error':entry.disposition,acknowledged_at:Date.now()});
         if (message.error) entry.reject(new Error(JSON.stringify(message.error))); else entry.resolve(message.result);
       } else {
-        for (const fn of this.listeners.get(message.method) || []) Promise.resolve(fn(message.params)).catch(error => interceptionErrors.push(error.message));
+        for (const fn of this.listeners.get(message.method) || []) Promise.resolve(fn(message.params)).catch(error => {
+          interceptionErrors.push(error.message);
+          // A failed fixture must release its paused request as a visible network error.
+          // Leaving it paused forever hides the first transport failure behind later UI timeouts.
+          if(message.method==='Fetch.requestPaused'&&pausedRequests.get(message.params.requestId)?.status==='paused')
+            this.send('Fetch.failRequest',{requestId:message.params.requestId,errorReason:'Failed'}).catch(failure=>interceptionErrors.push(failure.message));
+        });
       }
     });
     socket.addEventListener('close', () => {
@@ -80,10 +99,13 @@ class CDP {
   static async connect(url) { const socket = new WebSocket(url); await once(socket, 'open'); return new CDP(socket); }
   on(name, fn) { if (!this.listeners.has(name)) this.listeners.set(name, []); this.listeners.get(name).push(fn); }
   send(method, params = {}) {
+    if(this.socket.readyState!==WebSocket.OPEN)return Promise.reject(new Error('CDP socket closed'));
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('CDP timeout ' + method)); }, 12000);
-      this.pending.set(id, { resolve, reject, timer }); this.socket.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('CDP timeout ' + method + (method==='Runtime.evaluate'?': '+String(params.expression).slice(0,450):''))); }, 12000);
+      const trace=/^Fetch\.(continueRequest|fulfillRequest|failRequest)$/.test(method)?pausedRequests.get(params.requestId):null,disposition=method.split('.').at(-1);
+      if(trace)Object.assign(trace,{status:'protocol_pending',disposition,sent_at:Date.now()});
+      this.pending.set(id, { resolve, reject, timer,trace,disposition }); this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
   async evaluate(expression) {
@@ -107,9 +129,10 @@ async function screenshot(name){
   const filename=path.join(directory,name+'.png');await fs.writeFile(filename,Buffer.from(result.data,'base64'));console.log('SCREENSHOT '+filename);
 }
 async function check(name, fn) {
+  if(checkFilter&&!checkFilter.test(name)&&name!=='no browser exceptions or interception failures')return;
   checks++;
   try { await fn(); console.log('PASS ' + name); }
-  catch (error) { const dom = await details().catch(() => null); failures.push({ name, error: error.message, dom }); console.error('FAIL ' + name + ': ' + error.message + '\nDOM ' + JSON.stringify(dom)); }
+  catch (error) { if(!failures.length)console.error('FIRST FAILURE DIAGNOSTICS '+JSON.stringify({browserTraffic:browserTraffic.slice(-20),runtimeErrors,interceptionErrors,serverOutput,pendingProtocol:[...cdp.pending.keys()]}));const dom = await details().catch(() => null); failures.push({ name, error: error.message, dom }); console.error('FAIL ' + name + ': ' + error.message + '\nDOM ' + JSON.stringify(dom)); }
 }
 function assert(value, message) { if (!value) throw new Error(message); }
 async function click(selector) {
@@ -156,13 +179,27 @@ async function stop(child, label) {
   if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, 'exit').catch(() => {});
   if (process.platform === 'win32') {
+    const initial=await windowsProcessState(child.pid);
+    if(initial.status==='exited'){releaseExitedChild(child);console.log('CLEANUP native exit verified for created '+label+' PID '+child.pid);return;}
+    const identity=await child.nativeIdentity;
+    if(identity?.status!=='active'||identity.creation_id!==initial.creation_id)throw Error('Refusing to stop a reused or unverified created '+label+' PID '+child.pid);
+    if(initial.status==='terminating'){releaseChildReferences(child);console.warn('CLEANUP WARNING created '+label+' PID '+child.pid+' has a terminal code; Windows teardown remains pending. Runner references detached; synthetic profile retained.');return {teardownPending:true};}
     const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    await once(killer, 'exit');
+    await Promise.race([once(killer, 'exit'),delay(6000)]);
   } else child.kill('SIGTERM');
   await Promise.race([exited, delay(6000)]);
-  if (child.exitCode === null && child.signalCode === null) throw new Error('Created ' + label + ' process did not stop: ' + child.pid);
+  if (child.exitCode === null && child.signalCode === null) {
+    if(process.platform==='win32'){
+      const state=await windowsProcessState(child.pid);
+      if(state.status==='exited'){releaseExitedChild(child);console.log('CLEANUP native exit verified for created '+label+' PID '+child.pid);return;}
+      const identity=await child.nativeIdentity;
+      if(state.status==='terminating'&&identity?.status==='active'&&identity.creation_id===state.creation_id){releaseChildReferences(child);console.warn('CLEANUP WARNING created '+label+' PID '+child.pid+' has a terminal code; Windows teardown remains pending. Runner references detached; synthetic profile retained.');return {teardownPending:true};}
+    }
+    throw new Error('Created ' + label + ' process did not stop: ' + child.pid);
+  }
 }
 function workflowPosts(){return requests.filter(item=>item.path==='/api/workflows/jobs'&&item.method==='POST');}
+function aiRequestsCount(){return requests.filter(item=>item.method==='POST'&&['/api/ask','/api/agent','/api/workflows/jobs','/api/workflows/plan','/api/model/parse-assumptions','/api/meeting-draft','/api/models/check'].includes(item.path)).length;}
 async function fulfillJson(event,result,status=200){
   return cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:status,responseHeaders:[{name:'Content-Type',value:'application/json; charset=utf-8'}],body:Buffer.from(JSON.stringify(result)).toString('base64')});
 }
@@ -274,7 +311,8 @@ async function main() {
   // Strip inherited model/account configuration; retain OS/PATH variables needed to start executables.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(WORKOS_|OPENAI_|ANTHROPIC_|DEEPSEEK_|DSH_|CF_)/i.test(key)));
   Object.assign(env, { WORKOS_SYNC_ROOT: '', WORKOS_MEMORY_ROOT: '', WORKOS_PUBLIC_ORIGIN: '', WORKOS_PUBLIC_AUTH_MODE: 'access', SYNC_ROOT: '', MEMORY_ROOT: '', PUBLIC_ORIGIN: '', AUTH_MODE: 'access', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' });
-  server = start(process.env.WORKOS_TEST_PYTHON || 'python', ['-m', 'workos.server', '--port', String(port), '--data-dir', path.join(temp, 'data')], { env });
+  server = start(process.env.WORKOS_TEST_PYTHON || 'python', ['-m', 'workos.server', '--port', String(port), '--data-dir', path.join(temp, 'data')], { env, stdio:['ignore','pipe','pipe'] });
+  for(const output of [server.stdout,server.stderr])output.on('data',chunk=>{serverOutput=(serverOutput+chunk.toString()).slice(-12000);});
   const boot = await until(async () => { if(server.startError)throw server.startError; if(server.exitCode !== null)throw Error('Python exited '+server.exitCode);return api('bootstrap'); }, 'isolated app bootstrap');
   csrf = boot.csrf;
   assert(!boot.memory_root_available && !boot.sync?.enabled, 'Isolation roots unexpectedly enabled');
@@ -291,18 +329,23 @@ async function main() {
   const assumptions={currency:'RMB',unit:'百万元',period:'FY2025A',net_income:100,pe_multiple:12,diluted_shares:50};
   const modelResult=await api('model/valuation',{method:'net_income',assumptions});
   const savedModel=await api('deliverables',{title:'Synthetic saved valuation model',project_id:alpha.id,kind:'自定义',method:'net_income',assumptions,result:modelResult});
+  const ioDeliverable=await api('deliverables',{title:'Synthetic export retry draft',project_id:alpha.id,kind:'研究简报',body:'Synthetic original export body.'});
+  const ioOther=await api('deliverables',{title:'Synthetic unrelated editable draft',project_id:alpha.id,kind:'研究简报',body:'Synthetic unrelated saved body.'});
   const source = await api('documents/' + doc.id);
   const answer = '# Synthetic heading\n\n**Bold evidence** [S1]\n\n- First item\n- Second item\n\n| Metric | Value |\n| --- | --- |\n| Synthetic growth | 17% |\n\n<img src=x onerror="window.__cdpUnsafe=1">\n<script>window.__cdpUnsafe=1</script>\n<iframe src="https://invalid.example/"></iframe>';
   const nohitQuestion='请通读这份材料，概括主要结论，并列出需要核实的问题。';
   const nohitWarning='关键词未命中；已按你选定的范围使用原文节选进行模型分析，未读部分仍需核实。';
-  chrome = start(chromeExecutable, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-extensions', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + debugPort, '--user-data-dir=' + path.join(temp, 'chrome-profile'), 'about:blank']);
+  chrome = start(chromeExecutable, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--disable-component-update', '--disable-sync', '--disable-extensions', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=' + debugPort, '--user-data-dir=' + path.join(temp, 'chrome-profile'), 'about:blank']);
   const targets = await until(() => json('http://127.0.0.1:' + debugPort + '/json/list'), 'new Chrome CDP');
   cdp = await CDP.connect(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
   cdp.on('Runtime.exceptionThrown', event => runtimeErrors.push(event.exceptionDetails.exception?.description || event.exceptionDetails.text));
   // Pause all renderer traffic: only this loopback app is allowed; AI endpoints never reach Python.
   cdp.on('Fetch.requestPaused', async event => {
     const url = new URL(event.request.url);
+    const trace={id:event.requestId,path:url.pathname,method:event.request.method,status:'paused',at:Date.now()};browserTraffic.push(trace);pausedRequests.set(event.requestId,trace);if(browserTraffic.length>100)pausedRequests.delete(browserTraffic.shift().id);
     if (url.origin !== origin) return cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+    const fileMock=fileOperationMocks.get(event.request.method+' '+url.pathname+url.search);
+    if(fileMock){requests.push({path:url.pathname,query:url.search,method:event.request.method,body:event.request.postData?JSON.parse(event.request.postData):undefined});return fileMock(event);}
     const opId=requestOperation(event);if(opId&&event.request.method==='POST'&&/^\/api\/(ask|agent|meeting-draft|model\/parse-assumptions|workflows\/plan|models\/check)$/.test(url.pathname)&&!mockOperations.has(opId))mockOperations.set(opId,{start:Date.now(),body:JSON.parse(event.request.postData||'{}'),status:'running'});
     if(await mockContextRequest(event,url))return;
     if(csrfScenario.enabled&&url.pathname==='/api/bootstrap'&&event.request.method==='GET'){
@@ -977,6 +1020,64 @@ async function main() {
   await check('usage guide and Antigravity example render safe readable Markdown',async()=>{
     await route('overview');await click('[data-action=guidance]');await until(()=>cdp.evaluate("document.querySelector('#modal').open&&!!document.querySelector('.guidance-content h1')"),'guide modal');assert(await cdp.evaluate("document.querySelector('.guidance-content').textContent.includes('Antigravity 工作台案例')&&!document.querySelector('.guidance-content script')&&!window.__guideUnsafe"),'Guide Markdown unsafe or missing example');await screenshot('usage-guide-1280');await click('[data-close-dialog=modal]');
   });
+  await check('home purpose guidance and optional examples preserve an existing composer and never submit work',async()=>{
+    await route('overview');await select('#start-project',alpha.id);await select('#start-model','local-models:kimi-k2.7');await select('#start-purpose','dd');await fill('#start-input','Synthetic retained home draft');const before=aiRequestsCount();
+    await cdp.evaluate("window.__purposeComposer=document.querySelector('#start-input')");await select('#start-purpose','legal');await click('#purpose-preview details summary');
+    assert(await cdp.evaluate("document.querySelector('#start-input')===window.__purposeComposer&&document.querySelector('#start-input').value==='Synthetic retained home draft'&&!document.querySelector('[data-action=start-example]')&&document.querySelector('#purpose-preview').textContent.includes('保留')&&document.querySelector('#start-model').value==='local-models:kimi-k2.7'"),'Changing purpose replaced the composer, draft or model');
+    await fill('#start-input','');await select('#start-purpose','dd');await click('#purpose-preview details summary');await click('[data-action=start-example]');assert(await cdp.evaluate("document.querySelector('#start-input').value.includes('尽调')&&document.querySelector('#start-project').value==="+q(alpha.id)), 'Example did not fill the existing scoped composer');
+    assert(aiRequestsCount()===before,'Reading/filling guidance dispatched AI work');await screenshot('home-purpose-guidance-1280');await fill('#start-input','');
+  });
+  await check('failed manual save preserves the draft and explicit retry saves its current edited text',async()=>{
+    await route('deliverables');await click('[data-action=select-deliverable][data-id="'+ioDeliverable.id+'"]');await fill('#deliverable-body','Synthetic failed-save draft');const key='PATCH /api/deliverables/'+ioDeliverable.id;let attempts=0;
+    fileOperationMocks.set(key,async event=>++attempts===1?fulfillJson(event,{error:'Synthetic record write temporarily unavailable'},503):cdp.send('Fetch.continueRequest',{requestId:event.requestId}));
+    try{await click('#deliverable-form button[type=submit]');await until(()=>cdp.evaluate("!!document.querySelector('.io-failed')&&!document.querySelector('#deliverable-body').disabled"),'save failure stays reviewable');assert(await cdp.evaluate("document.querySelector('#deliverable-body').value==='Synthetic failed-save draft'&&document.querySelector('#deliverable-save-state').textContent.includes('尚未保存')"),'Failure discarded or falsely marked the draft saved');assert((await api('state')).deliverables.find(item=>item.id===ioDeliverable.id).body==='Synthetic original export body.','Rejected save changed the stored record');
+      await fill('#deliverable-body','Synthetic revised text for explicit save retry');await click('[data-action=io-retry]');await until(async()=>((await api('state')).deliverables.find(item=>item.id===ioDeliverable.id).body==='Synthetic revised text for explicit save retry'),'retry uses current text');await until(()=>cdp.evaluate("!document.querySelector('.io-failed')&&document.querySelector('#deliverable-save-state').textContent.includes('已保存')"),'save retry complete');assert(attempts===2,'Save retried without an explicit click or duplicated the write');
+    }finally{fileOperationMocks.delete(key);}
+  });
+  await check('export remains single-flight after a dirty editor is saved and rebuilt',async()=>{
+    const pathName='/api/export/'+ioDeliverable.id,key='GET '+pathName+'?format=html';let exports=0;const beforeModels=aiRequestsCount();
+    fileOperationMocks.set(key,async event=>{exports++;await cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body:Buffer.from('<p>Synthetic exported file</p>').toString('base64')});});
+    await fill('#deliverable-body','Synthetic edited text before single-flight export');await holdBrowserResponse(pathName);
+    try{await click('[data-action=export][data-id="'+ioDeliverable.id+'"][data-format=html]');await until(()=>exports===1,'first held file response');assert(await cdp.evaluate('document.querySelector('+q('[data-action=export][data-id="'+ioDeliverable.id+'"][data-format=html]')+').disabled'),'Rebuilt editor enabled an already pending export');
+      await cdp.evaluate('document.querySelector('+q('[data-action=export][data-id="'+ioDeliverable.id+'"][data-format=html]')+').dispatchEvent(new MouseEvent("click",{bubbles:true}))');await delay(200);assert(exports===1,'Duplicate export escaped the per-record guard after rerender');await releaseBrowserResponses();await until(()=>cdp.evaluate("document.querySelector('#io-status-region').hidden"),'export completes');assert((await api('state')).deliverables.find(item=>item.id===ioDeliverable.id).body==='Synthetic edited text before single-flight export'&&aiRequestsCount()===beforeModels,'Export failed to save current text or invoked AI');
+    }finally{await releaseBrowserResponses();fileOperationMocks.delete(key);}
+  });
+  await check('format failure can retry while another draft is open without saving or regenerating that draft',async()=>{
+    const pathName='/api/export/'+ioDeliverable.id,key='GET '+pathName+'?format=docx';let attempts=0;const beforeModels=aiRequestsCount();
+    fileOperationMocks.set(key,async event=>{if(++attempts===1)return fulfillJson(event,{error:'Synthetic Word exporter dependency unavailable'},503);return cdp.send('Fetch.fulfillRequest',{requestId:event.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/octet-stream'}],body:Buffer.from('Synthetic Word bytes').toString('base64')});});
+    try{await click('[data-action=export][data-id="'+ioDeliverable.id+'"][data-format=docx]');await until(()=>cdp.evaluate("!!document.querySelector('.io-failed')"),'persistent format failure');assert(await cdp.evaluate("document.querySelector('.io-failed').textContent.includes('正文已保留')&&!!document.querySelector('.io-failed details')"),'Format failure only appeared as a transient/raw error');await cdp.evaluate('window.scrollTo(0,0)');await screenshot('export-retry-1280');
+      await click('[data-action=select-deliverable][data-id="'+ioOther.id+'"]');await fill('#deliverable-body','Synthetic unsaved different draft');await click('[data-action=io-retry]');await until(()=>attempts===2,'format retry');await until(()=>cdp.evaluate("!document.querySelector('.io-failed')"),'format retry finished');assert((await api('state')).deliverables.find(item=>item.id===ioOther.id).body==='Synthetic unrelated saved body.'&&await cdp.evaluate("document.querySelector('#deliverable-body').value==='Synthetic unsaved different draft'&&document.querySelector('#deliverable-save-state').textContent.includes('尚未保存')"),'Retry silently saved/overwrote a different open draft');assert(aiRequestsCount()===beforeModels,'File-only retry regenerated a draft');await fill('#deliverable-body','Synthetic unrelated saved body.');await click('#deliverable-form button[type=submit]');await until(()=>cdp.evaluate("document.querySelector('#deliverable-save-state').textContent.includes('已保存')"),'unrelated test draft restored');
+    }finally{fileOperationMocks.delete(key);}
+  });
+  await check('project experience uses the actual scoped service for rule editing and opt-out without model calls',async()=>{
+    const before=aiRequestsCount();await route('overview');await click('[data-action=project-detail][data-id="'+alpha.id+'"]');await click('[data-action=experience-show]');await until(()=>cdp.evaluate("document.querySelector('#modal').open&&!!document.querySelector('[data-experience-enabled]')"),'experience modal');await click('[data-action=experience-create]');await fill('#field-content','这个项目每次先写结论，详细证据放附录。');await select('#field-purpose','workflow');await click('#modal-submit');
+    await until(()=>cdp.evaluate("!!document.querySelector('.experience-entry')&&document.querySelector('.project-experience').textContent.includes('详细证据放附录')"),'manual rule saved and list restored');let response=await api('projects/'+alpha.id+'/experience');const entry=response.entries.find(item=>item.content.includes('详细证据放附录'));assert(entry?.status==='active'&&entry.title==='项目工作规则'&&entry.purpose==='workflow','Explicit rule was not saved/active with the selected scope');assert(!(await api('projects/'+beta.id+'/experience')).entries.some(item=>item.id===entry.id),'Project rule leaked into another project');
+    await click('[data-action=experience-edit][data-id="'+entry.id+'"]');await fill('#field-content','这个项目每次先写结论，并列出需要核实的分歧。');await click('#modal-submit');await until(()=>cdp.evaluate("document.querySelector('.project-experience')?.textContent.includes('需要核实的分歧')"),'edited rule retained');await click('[data-action=experience-status][data-id="'+entry.id+'"][data-status=disabled]');await until(()=>cdp.evaluate("document.querySelector('.experience-entry .tag')?.textContent==='已停用'"),'rule disabled');
+    await click('[data-experience-enabled]');await until(async()=>!(await api('projects/'+alpha.id+'/experience')).settings.enabled,'project reuse optout');assert((await api('projects/'+beta.id+'/experience')).settings.enabled,'Optout leaked to another project');await screenshot('project-experience-1280');await click('[data-action=experience-delete][data-id="'+entry.id+'"]');await until(async()=>!(await api('projects/'+alpha.id+'/experience')).entries.some(item=>item.id===entry.id),'entry deleted');assert(aiRequestsCount()===before,'Viewing/editing rules called a model');await click('[data-close-dialog=modal]');
+  });
+  await check('experience provenance and public execution milestones stay scoped and safe',async()=>{
+    // The focused new-case run has no earlier AI turns; use the same scoped synthetic schema.
+    for(const project of [alpha,beta])if(![...mockConversations.values()].some(item=>item.project_id===project.id&&item.turns.length)){
+      const id=randomUUID(),stamp=new Date().toISOString();mockConversations.set(id,{id,workspace:'personal',project_id:project.id,purpose:'workflow',source_ids:[],metadata:{},title:'Synthetic provenance conversation',turns_total:1,created_at:stamp,updated_at:stamp,turns:[{id:randomUUID(),sequence:1,status:'completed',user_message:'Synthetic source instruction for '+project.name,assistant_message:'Synthetic scoped response.',source_ids:[],created_at:stamp}]});
+    }
+    const conversation=[...mockConversations.values()].find(item=>item.project_id===alpha.id&&item.turns.length),foreign=[...mockConversations.values()].find(item=>item.project_id===beta.id&&item.turns.length);assert(conversation&&foreign,'Missing synthetic source conversations');const turn=conversation.turns[0],pathName='/api/projects/'+alpha.id+'/experience';
+    const entry={id:'f'.repeat(32),title:'Synthetic provenance rule',content:'Synthetic user preference only.',kind:'preference',status:'pending',purpose:'workflow',source_state:'not_required',provenance:{conversation_id:foreign.id,turn_id:foreign.turns[0].id}};
+    fileOperationMocks.set('GET '+pathName,event=>fulfillJson(event,{settings:{enabled:true},counts:{events:1,pending:1},entries:[entry],events:[{purpose:'workflow',status:'completed',request:'Synthetic execution request',created_at:new Date().toISOString(),execution_steps:[{stage:'读取资料',detail:'仅使用本轮选定原文范围',status:'completed'}]},{origin:'record_change',purpose:'actions',action:'update',collection:'tasks',request:'Synthetic committed task title',created_at:new Date().toISOString(),status:'completed',execution_steps:[{stage:'保存记录',detail:'任务修改已提交',status:'completed'}]}]}));
+    try{await click('[data-action=experience-show]');await until(()=>cdp.evaluate("!!document.querySelector('[data-action=experience-source]')"),'provenance entry');await click('.project-experience>details summary');assert(await cdp.evaluate("document.querySelector('.project-experience').textContent.includes('仅使用本轮选定原文范围')&&document.querySelector('.project-experience').textContent.includes('记录操作 · 更新')&&document.querySelector('.project-experience').textContent.includes('任务修改已提交')"),'Execution milestone summary missing');await click('[data-action=experience-source]');await until(()=>cdp.evaluate("document.querySelector('#modal-error').textContent.includes('不属于当前项目')"),'foreign source rejected');assert(!await cdp.evaluate('document.querySelector("#modal").textContent.includes('+q(foreign.turns[0].user_message)+')'),'Foreign transcript displayed');entry.provenance={conversation_id:conversation.id,turn_id:turn.id};await click('[data-action=experience-source]');await until(()=>cdp.evaluate("document.querySelector('#modal-title').textContent==='项目规则的来源'"),'correct original turn');assert(await cdp.evaluate('document.querySelector(".conversation-transcript").textContent.includes('+q(turn.user_message)+')&&!document.querySelector(".conversation-transcript script")'),'Scoped original turn missing or unsafe');await click('[data-close-dialog=modal]');
+    }finally{fileOperationMocks.delete('GET '+pathName);}
+  });
+  await check('machine capabilities load only on demand and explain environment limits without probing models',async()=>{
+    let reads=0;const before=aiRequestsCount();fileOperationMocks.set('GET /api/system/readiness',async event=>{reads++;return fulfillJson(event,{schema_version:1,core_ready:true,python:'3.13',checks:[{id:'docx',label:'Word 导出',ready:true,detail:'文件作者已安装。'},{id:'excel',label:'Excel 原生重算',ready:false,detail:'尚未检测到本机 Excel；不能声明真实重算已完成。'},{id:'models',label:'模型连接',ready:false,detail:'待验证，未调用模型网络。'}]});});fileOperationMocks.set('GET /api/harness',event=>fulfillJson(event,{engine:'WorkOS',tools:{names:['workos_read_source'],read_budget:80000},limits:['复核不等于事实认证']}));
+    try{await route('settings');assert(reads===0&&await cdp.evaluate("!document.querySelector('#machine-capabilities').open"),'Settings automatically read/probed capabilities');await click('#machine-capabilities>summary');await until(()=>cdp.evaluate("document.querySelector('#machine-capabilities-body').textContent.includes('尚未检测到本机 Excel')"),'capability state rendered');await click('#machine-capabilities-body details summary');assert(await cdp.evaluate("document.querySelector('#machine-capabilities-body').textContent.includes('分段读取')&&document.querySelector('#machine-capabilities-body').textContent.includes('不能代替事实核实')&&document.querySelector('#machine-capabilities-body').textContent.includes('下一步')"),'Capabilities overclaimed model/Excel readiness or lacked guidance');assert(reads===1&&aiRequestsCount()===before,'Pure state panel called a model or duplicated readiness reads');await cdp.evaluate("document.querySelector('#machine-capabilities').scrollIntoView({block:'start',behavior:'instant'})");await screenshot('machine-capabilities-1280');
+    }finally{fileOperationMocks.delete('GET /api/system/readiness');fileOperationMocks.delete('GET /api/harness');}
+  });
+  await check('held startup bootstrap ends with a bounded reconnect state and never replays model work',async()=>{
+    await route('overview');const before=aiRequestsCount();let script;
+    try{script=await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:"(() => {const native=window.fetch;window.__startupNative=native;let held=false;window.fetch=(...args)=>{if(new URL(args[0],location.href).pathname==='/api/bootstrap'&&!held){held=true;window.__startupHeldAt=performance.now();window.__startupSignal=args[1]?.signal;return new Promise(resolve=>{let released=false;window.__startupRelease=()=>{if(released)return;released=true;resolve(native(...args));};});}return native(...args);};})()"});
+      await cdp.send('Page.reload');await until(()=>cdp.evaluate("window.__startupHeldAt!=null"),'new document holding startup bootstrap');await until(()=>cdp.evaluate("document.querySelector('.state-error h1')?.textContent==='本地服务尚未响应'&&document.querySelector('#main').getAttribute('aria-busy')==='false'"),'bounded bootstrap failure',20000);assert(await cdp.evaluate("window.__startupSignal.aborted&&performance.now()-window.__startupHeldAt>=11500&&document.querySelector('.state-error').textContent.includes('资料与草稿保留')&&!!document.querySelector('[data-action=retry]')"),'Startup GET did not abort/show an explicit retry');await screenshot('startup-reconnect-1280');await click('[data-action=retry]');await until(()=>cdp.evaluate("!!document.querySelector('.project-card')&&!document.querySelector('.state-error')&&document.querySelector('#main').getAttribute('aria-busy')==='false'"),'explicit reconnect opens saved workspace');
+      await cdp.evaluate("window.__startupRelease();window.fetch=window.__startupNative");await delay(200);assert(await cdp.evaluate("!!document.querySelector('.project-card')&&!document.querySelector('.state-error')"),'Late initial read replaced the reconnected view');assert(aiRequestsCount()===before,'Startup/reconnect submitted or replayed model work');
+    }finally{if(script)await cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:script.identifier}).catch(error=>console.error('Startup fixture cleanup: '+error.message));await cdp.evaluate("if(window.__startupNative)window.fetch=window.__startupNative;window.__startupRelease?.()").catch(()=>{});}
+  });
   await check('mobile 375px viewport has no document horizontal overflow', async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
     for (const page of ['research','overview','projects','meetings','finance','deliverables']) {
@@ -994,19 +1095,26 @@ async function main() {
 }
 (async () => {
   try { await main(); }
-  catch(error) { console.error('HARNESS ERROR ' + error.stack); if(cdp)console.error('DOM ' + JSON.stringify(await details().catch(()=>null))); process.exitCode=1; }
+  catch(error) { console.error('HARNESS ERROR ' + error.stack); console.error('ISOLATED DIAGNOSTICS '+JSON.stringify({browserTraffic:browserTraffic.slice(-15),runtimeErrors,interceptionErrors,serverOutput}));if(cdp)console.error('DOM ' + JSON.stringify(await details().catch(()=>null))); process.exitCode=1; }
   finally {
+    if(cdp?.socket.readyState===WebSocket.OPEN)try{await cdp.send('Browser.close');}catch(error){if(!/socket closed/.test(error.message))console.error('Chrome graceful close: '+error.message);}
     if(cdp)cdp.socket.close();
-    const errors=[];
-    for(const [child,label] of [[chrome,'Chrome'],[server,'Python']])try{await stop(child,label);}catch(error){errors.push(error.message);}
-    if(temp && !errors.length) {
+    const errors=[];let teardownPending=false;
+    for(const [child,label] of [[chrome,'Chrome'],[server,'Python']])try{const status=await stop(child,label);teardownPending=teardownPending||!!status?.teardownPending;}catch(error){errors.push(error.message);}
+    if(temp && !errors.length && !teardownPending) {
       // Delete only the exact mkdtemp-owned directory, never a supplied app/profile path.
       const resolved=path.resolve(temp), parent=path.resolve(os.tmpdir());
       const stat=await fs.lstat(resolved);
       if(path.dirname(resolved)!==parent || !path.basename(resolved).startsWith('workos-research-cdp-') || stat.isSymbolicLink())throw Error('Refusing unsafe temporary cleanup '+resolved);
-      await fs.rm(resolved,{recursive:true,force:true,maxRetries:10,retryDelay:150});
-      console.log('CLEANUP stopped created Chrome/Python processes and removed verified temporary directory');
+      try{
+        await fs.rm(resolved,{recursive:true,force:true,maxRetries:10,retryDelay:150});
+        console.log('CLEANUP stopped created Chrome/Python processes and removed verified temporary directory');
+      }catch(error){
+        if(!['EPERM','EBUSY','ENOTEMPTY'].includes(error.code))throw error;
+        console.warn('CLEANUP created processes verified stopped; retained synthetic temporary directory while Windows releases file handles: '+resolved);
+      }
     }
+    if(temp&&teardownPending)console.warn('CLEANUP WARNING synthetic temporary directory retained for pending Windows teardown: '+temp);
     if(errors.length){console.error('CLEANUP ERROR '+errors.join('; '));process.exitCode=1;}
   }
 })().catch(error=>{console.error(error.stack);process.exitCode=1;});

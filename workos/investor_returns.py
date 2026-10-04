@@ -246,7 +246,7 @@ def calculate(a):
                 if entry_ownership > 1: raise ValueError('投资金额超过投后股权估值，请核对金额单位或估值口径')
             events = a.get('dilution_events') or []
             if not isinstance(events, list) or len(events) > 20: raise ValueError('稀释事件最多20项，请提供比例列表')
-            if a.get('ipo_dilution') is not None and events:
+            if a.get('ipo_dilution') not in (None, 0) and events:
                 raise ValueError('IPO稀释与稀释事件列表同时出现，请确认是否重复计入IPO')
             if a.get('exit_ownership') is not None:
                 if events or a.get('ipo_dilution') not in (None, 0):

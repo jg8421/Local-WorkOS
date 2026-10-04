@@ -321,7 +321,10 @@ def docx_report(record):
   from docx.shared import Pt,Cm,RGBColor
   from docx.oxml import OxmlElement
   from docx.oxml.ns import qn
- except ImportError as exc:raise ValueError('本机缺少 python-docx，请先安装可选文档依赖') from exc
+ except ImportError:
+  # The HTTP adapter identifies optional-library setup failures by library name.
+  # Keep the original ImportError rather than turning it into a task-input error.
+  raise
  doc=Document()
  section=doc.sections[0];section.top_margin=Cm(1.8);section.bottom_margin=Cm(1.8);section.left_margin=Cm(2);section.right_margin=Cm(2)
  normal=doc.styles['Normal'];normal.font.name='Arial';normal.font.size=Pt(10.5)

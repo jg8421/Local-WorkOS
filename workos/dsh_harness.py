@@ -172,7 +172,7 @@ def run(app, prompt, model, models, *, docs=None, coverage=(), progress_callback
     native = docs is not None
     packet = evidence_packet(docs, coverage) if native else {'sources':[],'read_budget':READ_BUDGET,'tool_budget':TOOL_BUDGET}
     from .workflow_runs import exclusive_model_run
-    with exclusive_model_run(app.dsh_lock), tempfile.TemporaryDirectory(prefix='workos-dsh-') as temporary:
+    with exclusive_model_run(app.dsh_lock), tempfile.TemporaryDirectory(prefix='workos-dsh-', ignore_cleanup_errors=os.name == 'nt') as temporary:
         check_cancelled()
         root = Path(temporary)
         sessions = root/'sessions'
@@ -246,7 +246,25 @@ def run(app, prompt, model, models, *, docs=None, coverage=(), progress_callback
             raise ValueError('无法启动或读取DSH；请检查本机安装') from exc
         finally:
             if process is not None and process.poll() is None:
-                process.terminate()
-                try:process.wait(timeout=2)
+                # Windows launchers may re-exec a child that retains the event
+                # writer handle. Kill only this still-active owned process tree;
+                # never search for or terminate unrelated Python/Node processes.
+                if os.name == 'nt':
+                    try:
+                        subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],
+                            stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                            timeout=4,creationflags=flags,check=False)
+                    except (OSError,subprocess.TimeoutExpired):
+                        pass
+                else:
+                    process.terminate()
+                try:
+                    process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    process.kill();process.wait(timeout=2)
+                    try:
+                        process.kill()
+                        process.wait(timeout=2)
+                    except (OSError,subprocess.TimeoutExpired):
+                        # Delayed handle cleanup must not replace the original
+                        # cancellation/provider exception with a cleanup error.
+                        pass

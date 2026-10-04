@@ -1,12 +1,12 @@
 # Local WorkOS — AI engineering handoff
 
-Documentation date: 2026-10-04. Product version: 1.9.1. This document describes semantic task planning, conversational missing-input handling, independent custom model connections, unified selection, exact provider dispatch, persistent contextual revisions, factual progress, versioned project output archiving, cancellable work, quality harness and durable jobs.
+Documentation date: 2026-10-04. Product version: 1.11.0. This document covers scoped source tools, project experience, portable deployment, investor returns, semantic planning, persistent revisions, versioned output archiving and cancellable durable jobs.
 
 Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified behavior and proposed additions. Earlier [README](<../README.md>), [architecture](<ARCHITECTURE.md>) and [testing](<TESTING.md>) descriptions can lag current code; do not remove password auth, editable PPTX or four valuation methods based on historical wording.
 
 ## Source vs install vs data
 - The repository root is editable development source and the Git working tree.
-- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/1.9.1/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version.
+- Windows installation is `%LOCALAPPDATA%/Programs/LocalWorkOS/<version>/<build>`. Changes in a source checkout are not hot-reloaded there. Preserve/update the existing startup shortcut when changing the install version. Portable distributions use their own isolated bundled Python; see [deployment](DEPLOYMENT.md).
 - Runtime personal/demo SQLite, authentication and logs are under `%LOCALAPPDATA%/LocalWorkOS`, never in source control.
 - OneDrive is an optional JSON/text mirror and backup target, not the live SQLite/WAL database or a bidirectional multi-master store.
 - Remote access reaches one authoritative host through its dedicated tunnel; keep that host running and online. Do not attach divergent databases/sessions to the same tunnel from two machines.
@@ -27,6 +27,11 @@ Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified beha
 | [conversations](<../workos/conversations.py>) | Scoped persistent rounds, bounded successful-turn context, artifact snapshots and signatures |
 | [project artifacts](<../workos/project_artifacts.py>) | Runtime-only folder matching/binding, immutable exports, hash manifests and authenticated downloads |
 | [quality](<../workos/quality.py>) | Acceptance checks, critic schema and repair brief; no truth certification |
+| [evidence harness](<../workos/evidence_harness.py>) | Provider-neutral bounded source tools, actual read coverage, strict final scope and repaired-draft validation |
+| [project experience](<../workos/project_experience.py>) | Project/workspace scoped persistent preferences, confirmation, provenance, audit and backup; not weight training |
+| [industry playbooks](<../workos/industry_playbooks.py>) | Generic task know-how conditional on user scope; no private historical facts |
+| [investor returns](<../workos/investor_returns.py>) / [Excel verification](<../workos/return_excel.py>) | Investor cash-flow MOC/XIRR, real Excel recalculation and independent checking |
+| [portable workbook author](<../workos/portable_return_workbook.py>) | Formula-preserving openpyxl author when approved artifact Node runtime is unavailable |
 | [DSH adapter](<../workos/dsh_harness.py>) | Completion/exit checks and disposable scoped tool execution |
 | [harness contract](<HARNESS.md>) | Quality modes, evidence ledger, compatibility and limitations |
 | [store](<../workos/store.py>) | Allowed fields/defaults/type checks, associations, SQLite transactions, backups |
@@ -44,9 +49,12 @@ Read [PRD](<PRD.md>) first. It distinguishes implemented features, verified beha
 | [auth UI](<../web/auth.js>) / [login](<../web/login.html>) | Same-origin login and local-only password setup |
 | [launcher](<../launch.py>) | Stable startup, saved non-secret WORKOS settings and approved Office runtime paths |
 | [installer](<../tools/install.ps1>) / [public starter](<../tools/start_public.py>) | Separate Windows deployment and idempotent dedicated connector startup |
+| [portable packager](<../tools/package_windows.py>) / [portable verification](<../tools/verify_portable.py>) | Clean-HEAD whitelist, pinned embedded runtime, offline wheel dependencies, delivered-launcher smoke |
 | [tests](<../tests/>) | Synthetic, isolated HTTP/SQLite, exports, model formulas and authentication regressions |
 
 ## Full development dependencies
+The full Windows portable package needs no globally installed Python for its core and Word/PPT/XLSX exports. Model providers remain separately configured, and investor XIRR verification requires installed Microsoft Excel. Package manifests identify exact source revision and runtime/dependency hashes; preview builds are not release packages.
+
 The original [requirements](<../requirements.txt>) only declare the historical Word dependency. Use [development dependencies](<../requirements-development.txt>) for the full current test/export suite; CI now installs this full file. A locally passing suite is not proof of a successful remote CI run.
 
 ```powershell
@@ -61,7 +69,7 @@ $env:WORKOS_PUBLIC_AUTH_MODE = "access"
 .venv/Scripts/python.exe -m unittest discover -s tests -q
 ```
 
-Core HTTP/SQLite and password mode use stdlib. The [vendor PDF parser](<../vendor/pypdf/>) is included. Existing authorized DSH/compatible bridges and the approved bundled LibreOfficeKit/Node are external host runtime prerequisites, not included credentials. Do not search/install substitute Office renderers as an unreviewed fallback.
+Core HTTP/SQLite and password mode use stdlib. The [vendor PDF parser](<../vendor/pypdf/>) is included. Model routes require the corresponding authorized DSH or compatible service; their credentials are not included. The optional meeting-PDF route requires the approved LibreOfficeKit/Node setup. Investor-return workbook authoring can use the full bundle's openpyxl author without Node/artifact-tool, while actual return recalculation still requires host Microsoft Excel. Do not search/install substitute Office renderers as an unreviewed fallback.
 
 ## Safe development
 Do not use the launcher to create a development instance on a deployment host: it can reuse production 18866 and restore saved public/sync settings. Start the server directly on a free alternate port and an isolated temporary data directory.
@@ -74,6 +82,8 @@ $testData = Join-Path $env:TEMP ("WorkOS-test-" + [guid]::NewGuid().ToString("N"
 Use synthetic data and mocked model responses. If the port is occupied, choose another rather than stopping unrelated processes. Browser scripts use WORKOS_E2E_URL or WORKOS_TEST_URL according to the script; read [TESTING](<TESTING.md>) before execution. For Host/security tests use raw HTTP headers (http.client); some fetch clients rewrite the reserved Host header.
 
 ## Verified limitations to preserve in requirements
+Project experience is separate from original imported personal memory. Only explicitly durable user preferences and appropriately confirmed scoped entries can enter an external task context. Audit events alone do not become facts. Public execution records contain stages and tool actions, never private chain of thought. `/api/harness` and `/api/system/readiness` inspect capabilities without making model calls; availability is not upstream model-identity certification.
+
 1. New research uploads retain immutable original bytes in data_dir/originals/{workspace}/{sha256}, with authenticated downloads and OneDrive copying/recovery. Older records cannot recover original bytes without reupload. JSON backups exclude original bytes; OneDrive mirrors include them. No automatic scanned-PDF OCR; Excel cached values may be stale.
 2. Saved valuation deliverables persist method/assumptions/result; Store recomputes result on save/update/restore. UI restores a model for continued calculation/scenarios, and saved-record XLSX export regenerates linked formulas. Older body-only snapshots remain readable but cannot be assumed reloadable. Imported complex Excel is extracted for source-based review; it is not automatically rewritten or recalculated.
 3. Citations locate extracted excerpts; [S#] number validation is not semantic support or fact verification. Extracted text remains editable even though uploaded originals are immutable; citations have not been changed into immutable version anchors.
@@ -137,4 +147,4 @@ Future priorities are immutable citation anchors, evidence/issue reconciliation,
 
 Ask, agent, meeting, valuation and material generation share canonical resolution. Legacy known model IDs infer their fixed service; explicit mode/provider mismatch or configured custom-ID mismatch rejects before provider execution. Local-only ask remains lexical; rules meeting bypasses AI context. GPT action turns use DSH with the same scoped JSON tool protocol; arbitrary DSH tools stay disabled.
 
-1.10.0投资回报：investor_returns.py为独立经济校验；return_workbook.mjs用公开artifact-tool API生成新XLSX；return_excel.ps1在单独隐藏Excel实例中禁宏/禁外链重算；return_excel.py比较XIRR/MOC/持股/回收并缓存完全相同输入5分钟。return_sources.py限当前项目与安全绑定目录、展示文件/页/单元格与哈希、复核生成期间来源未变。完整条件自动保存/归档，新轮次保留结构化条件而不串接旧冲突描述。
+1.10.0投资回报：investor_returns.py为独立经济校验；可用的artifact-tool运行环境经return_workbook.mjs生成新XLSX，否则由portable_return_workbook.py使用full包内置openpyxl创建公式联动工作簿；return_excel.ps1在单独隐藏Excel实例中禁宏/禁外链重算；return_excel.py比较XIRR/MOC/持股/回收并缓存完全相同输入5分钟。两种工作簿作者均需真实Excel重算与独立现金流校验通过。return_sources.py限当前项目与安全绑定目录、展示文件/页/单元格与哈希、复核生成期间来源未变。完整条件自动保存/归档，新轮次保留结构化条件而不串接旧冲突描述。

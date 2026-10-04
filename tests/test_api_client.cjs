@@ -239,7 +239,7 @@ test('normal GET,raw response and204 return without extra requests or JSON parsi
 
 test('a pending download refuses browser effects after an epoch or workspace change', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../web/app.js'), 'utf8');
-  const start = source.indexOf('  async function download(');
+  const start = source.indexOf('  async function rawDownload(');
   const end = source.indexOf('  async function exportDeliverable(', start);
   assert.ok(start >= 0 && end > start, 'Extract the actual application download function');
   for (const change of [{ epoch: 2 }, { workspace: 'demo' }, null]) {
@@ -257,7 +257,7 @@ test('a pending download refuses browser effects after an epoch or workspace cha
       setTimeout: () => effects.push('timer'),
       notify: () => effects.push('notify')
     });
-    const download = vm.runInContext(source.slice(start, end) + '\ndownload;', context);
+    const download = vm.runInContext(source.slice(start, end) + '\nrawDownload;', context);
     const body = { title: 'Synthetic model' };
     const result = download('/model/export-xlsx', 'fallback.xlsx', { method: 'POST', body });
     const completed = change ? assert.rejects(result, error => error.name === 'StaleRequestError') : result;
