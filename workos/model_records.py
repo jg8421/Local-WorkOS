@@ -58,7 +58,11 @@ def canonical_model(record):
             raise ValueError('结构化模型必须指定估值方法')
         return None
     try:
-        result = calculate_valuation(method, assumptions)
+        if method == 'investor_return':
+            from .return_excel import calculate_excel
+            result = calculate_excel(assumptions)
+        else:
+            result = calculate_valuation(method, assumptions)
     except (TypeError, KeyError, OverflowError, ZeroDivisionError) as exc:
         raise ValueError('模型假设格式或数值超出可计算范围') from exc
     validate_object(result, '模型计算结果')

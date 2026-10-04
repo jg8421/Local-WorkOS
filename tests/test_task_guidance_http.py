@@ -59,13 +59,21 @@ class TaskGuidanceHttpTests(unittest.TestCase):
         self.guidance(status, result, purpose='workflow')
         self.no_generated_work()
 
-    def test_plain_moic_irr_request_asks_for_a_supported_method_before_model_or_calculation(self):
+    def test_plain_moic_irr_request_uses_return_method_and_asks_only_for_missing_conditions(self):
+        self.app.local_chat.side_effect=None
+        self.app.local_chat.return_value=(json.dumps({'assumptions':{},'clarifications':[]}), 'Synthetic selected model')
         status, result = self.post('/api/model/parse-assumptions', {'text': 'Calculate synthetic MOIC and IRR.',
             'mode': 'deepseek', 'model_id': 'deepseek-v4.1-flash', 'project_id': self.project['id']})
         self.guidance(status, result, purpose='valuation')
         self.assertNotIn('irr', result)
         self.assertNotIn('moic', result)
-        self.no_generated_work()
+        self.assertEqual(result['method'],'investor_return')
+        self.assertEqual(len(result['questions']),1)
+        self.app.local_chat.assert_called_once()
+        self.assertEqual(self.app.local_chat.call_args.args[1],'deepseek-v4.1-flash')
+        self.app.dsh_answer.assert_not_called()
+        self.assertEqual(self.store.list('deliverables'),[])
+        self.assertEqual(self.app.artifacts.status('personal',self.project)['archives'],[])
 
     def test_empty_ask_actions_and_meeting_transcript_are_questions(self):
         cases = [('/api/ask', self.ask_body(question=''), 'ask'),

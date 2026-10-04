@@ -16,6 +16,7 @@ from .valuation import ASSUMPTION_SCHEMAS, missing_assumptions
 
 
 METHOD_OPTIONS = [
+    {'value': 'investor_return', 'label': '投资回报（MOC / IRR）'},
     {'value': 'net_income', 'label': '净利润 × 市盈率（P/E）'},
     {'value': 'ps', 'label': '收入 × 市销率（P/S）'},
     {'value': 'dcf', 'label': '现金流折现（DCF）'},
@@ -136,6 +137,8 @@ class ClarificationRequired(ValueError):
 
 def resolve_method(method=None, text=''):
     """Resolve only an explicit alias or unambiguous financial language."""
+    if re.search(r'(?<![a-z])(?:MOC|MOIC|IRR|XIRR)(?![a-z])|投资回报|回报倍数', text, re.I) and not re.search(r'\blbo\b|杠杆收购', text, re.I):
+        return 'investor_return'
     if isinstance(method, str) and method.strip().lower() in ASSUMPTION_SCHEMAS:
         return method.strip().lower()
     content = ' '.join(value for value in (method, text) if isinstance(value, str)).lower()
@@ -145,6 +148,7 @@ def resolve_method(method=None, text=''):
         'ps': r'\bp\s*[/\-]?\s*s\b|市销率|(?:收入|营收)\s*[×x*]|(?:\d+(?:\.\d+)?\s*倍\s*(?:收入|营收))|(?:收入|营收)倍数',
         'dcf': r'\bdcf\b|现金流(?:量)?(?:折现|贴现)',
         'lbo': r'\blbo\b|杠杆收购',
+        'investor_return': r'(?<![a-z])(?:MOC|MOIC|IRR|XIRR)(?![a-z])|投资回报|回报倍数',
     }
     for key, pattern in patterns.items():
         if re.search(pattern, content, re.I):
@@ -180,6 +184,9 @@ def normalize_assumptions(method, assumptions):
     """
     if not isinstance(method, str) or method not in ASSUMPTION_SCHEMAS or not isinstance(assumptions, dict):
         raise ValueError('估值方法或假设结构不正确')
+    if method=='investor_return':
+        from .investor_returns import normalize
+        return normalize(assumptions)
     result = copy.deepcopy(assumptions)
     allowed = set(ASSUMPTION_SCHEMAS[method]['required'] + ASSUMPTION_SCHEMAS[method]['optional'])
     for key in allowed & NUMERIC:
@@ -238,6 +245,9 @@ def financial_clarification(method, assumptions, model_questions=()):
     if not isinstance(assumptions, dict):
         raise ValueError('估值假设必须是对象')
     resolved = resolve_method(method)
+    if resolved == 'investor_return':
+        from .investor_returns import clarification
+        return clarification(assumptions)
     if resolved is None:
         allowed = set().union(*(set(schema['required'] + schema['optional']) for schema in ASSUMPTION_SCHEMAS.values()))
         retained = {key: value for key, value in assumptions.items() if key in allowed}

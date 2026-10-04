@@ -89,7 +89,7 @@ def plan_workflow_ai(app,body):
             '存在实质歧义时只问1至3个必要问题。邮件和通用技术解释不强制项目/资料/收件人。'
             '财务输入仅识别方法，不计算或补造金额、币种、单位、期间。'
             '只返回JSON：{"route":"research|finance|meetings|overview","workflow_key":"下列编号或空",'
-            '"method":"net_income|ps|dcf|lbo或空","status":"ready或needs_input","message":"简短说明",'
+            '"method":"investor_return|net_income|ps|dcf|lbo或空（MOC/MOIC/IRR投资回报选investor_return）","status":"ready或needs_input","message":"简短说明",'
             '"questions":[{"id":"用途","label":"一个必要问题","hint":"可直接用自己的话回答","options":[]}]}。'
             '\n可用材料流程：'+json.dumps([{k:item[k] for k in ('key','title','description')} for item in workflow_catalog()],ensure_ascii=False)+
             '\nfinance=财务与估值；meetings=已有会议的逐字稿整理；overview=项目资料整理。')
@@ -109,7 +109,9 @@ def plan_workflow_ai(app,body):
     labels={'finance':'财务模型与回报','meetings':'整理会议纪要','overview':'整理项目材料'}
     result={'status':'ready','workflow_key':key,'route':route,'question':message,
             'label':RECIPES[key][0] if key else labels[route],'model':model}
-    if route=='finance' and parsed.get('method') in ('net_income','ps','dcf','lbo'):result['method']=parsed['method']
+    if route=='finance' and parsed.get('method') in ('investor_return','net_income','ps','dcf','lbo'):
+        from .clarifications import resolve_method
+        result['method']=resolve_method(parsed['method'],message)
     return result
 
 

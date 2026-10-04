@@ -4,8 +4,10 @@ import json
 import math
 import re
 from datetime import date, timedelta
+from .investor_returns import FIELDS as RETURN_FIELDS
 
 METHODS = {
+    'investor_return': '投资回报 · MOC / IRR（投资人现金流）',
     'net_income': '净利润 × P/E（股权价值）',
     'ps': 'P/S（股权价值）',
     'dcf': 'DCF / FCFF（企业价值至股权价值桥）',
@@ -373,6 +375,9 @@ def calculate_valuation(method, assumptions):
     allowed = set(ASSUMPTION_SCHEMAS[method]['required']) | set(ASSUMPTION_SCHEMAS[method]['optional']) | {'as_of_date','source_notes','assumption_sources','scenario','notes'}
     unknown = sorted(set(a) - allowed)
     if unknown: raise ValueError('以下假设字段未映射，未用于计算：' + '、'.join(unknown))
+    if method == 'investor_return':
+        from .investor_returns import calculate
+        return _finite_result(calculate(a))
     if method == 'net_income':
         return _finite_result(_calc_net_income(a))
     if method == 'ps':
@@ -399,6 +404,7 @@ def _finite_result(result):
 
 
 ASSUMPTION_SCHEMAS = {
+    'investor_return': {'required': ['currency', 'unit'], 'optional': RETURN_FIELDS},
     'net_income': {'required': ['currency', 'unit', 'period', 'net_income', 'pe_multiple'], 'optional': ['diluted_shares', 'as_of_date', 'source_notes']},
     'ps': {'required': ['currency', 'unit', 'period', 'revenue', 'ps_multiple'], 'optional': ['net_debt', 'diluted_shares', 'as_of_date', 'source_notes']},
     'dcf': {'required': ['currency', 'unit', 'valuation_date', 'wacc', 'discount_timing', 'terminal_method', 'net_debt', 'minority_interest', 'forecasts'], 'optional': ['tax_rate', 'terminal_growth', 'terminal_multiple', 'as_of_date', 'source_notes']},
@@ -423,6 +429,9 @@ def missing_assumptions(method, assumptions):
     if not isinstance(method,str) or method not in ASSUMPTION_SCHEMAS or not isinstance(assumptions, dict):
         raise ValueError('估值方法或假设结构不正确')
     schema = ASSUMPTION_SCHEMAS[method]
+    if method == 'investor_return':
+        from .investor_returns import missing
+        return missing(assumptions)
     missing = [key for key in schema['required'] if assumptions.get(key) is None or assumptions.get(key) == '']
     if method == 'dcf':
         terminal = assumptions.get('terminal_method')

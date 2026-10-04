@@ -113,3 +113,7 @@ node tests/browser_research_cdp.cjs
 ```
 
 The Chrome/CDP test starts its own temporary Python instance and Chrome profile, seeds synthetic records, intercepts ask/agent responses, never calls real models, and stops only its created process trees. Use Node24 built-in fetch/WebSocket, Python in PATH or WORKOS_TEST_PYTHON, and Chrome installed or WORKOS_TEST_CHROME. It verifies merged home/project navigation, one composer/drafts/scope, readable Markdown/inert unsafe HTML, citation navigation, editable paste and narrow-screen overflow. Never substitute production 18866 or an existing private Chrome profile.
+
+## Investor-return regression (1.10.0)
+
+Synthetic tests cover investor/company value separation, pre/post-money ownership, IPO and multiple dilution, dividends and follow-on dated flows, losses, ambiguous XIRR signs, mixed currencies, loose units/dates and conflicting holding periods. Real Windows Excel integration checks XIRR formulas/caches, changed exit drivers and complete cashflow schedules against independent economics; CI skips the host-dependent integration. HTTP checks real Excel-adapter dispatch, one question group, source opt-out/scope, changed-source refusal, saved versions and cancellation. Chrome adds return dialogue/auto-result/source scope and PE-to-return routing. The full release SOP retains all existing workflow, auth, export and UI regressions.

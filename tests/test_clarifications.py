@@ -33,7 +33,7 @@ class ClarificationTests(unittest.TestCase):
         self.assertEqual(resolve_method('ps', '讨论DCF和LBO'), 'ps')
         report = financial_clarification('magic', {'revenue': 500, 'currency': 'USD'})
         self.assertEqual([option['value'] for option in report['questions'][0]['options']],
-                         ['net_income', 'ps', 'dcf', 'lbo'])
+                         ['investor_return', 'net_income', 'ps', 'dcf', 'lbo'])
         self.assertEqual(report['assumptions']['revenue'], 500)
 
     def test_missing_units_and_period_keep_known_numbers_without_zero_defaults(self):

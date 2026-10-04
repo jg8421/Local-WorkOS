@@ -121,6 +121,9 @@ def expert_minutes_docx(title,summary,participants='',date_text='',experts=None,
   else:doc.add_paragraph(line)
  out=BytesIO();doc.save(out);return out.getvalue()
 def valuation_xlsx(method, assumptions, result):
+    if method == 'investor_return':
+        from .return_excel import workbook
+        return workbook(assumptions)[1]
     import io, json
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment

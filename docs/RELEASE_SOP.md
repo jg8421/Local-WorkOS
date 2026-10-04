@@ -17,3 +17,5 @@
 每次安装使用应用版本下的新build目录，避免已删除旧代码留在覆盖安装中。运行实例 `/api/health` 的 version/source_revision 必须与提交一致；仅复制 OneDrive 源码或 push GitHub 不算服务已发布。生产探测仅检查读取、本地健康、统一模型与自定义定义/指南接口、公开登录页和匿名 API 拒绝；真实密码与 cookies 不读取、不打印。登录、记住会话、注销和 CSRF 用临时账号做回归。不能为了验证生产连接而注册模型或发送业务提示词。
 
 数据库备份位于应用本机数据目录的 release-backups，包含 personal/demo 和已存在的 workflow-jobs、conversations、project-artifacts 数据库，以及私有 project-artifacts.json/custom-models.json 定义；模型API key不在定义中，状态缓存不备份。原件、已导出版本与认证配置留在原位置。恢复模型定义后仍需重新填写只存在于进程内存的密钥。后台资料快照、对话历史和模型/项目路径配置不进入 Git 或 OneDrive 记录镜像；已保存草稿与质量报告正常镜像。对话另有 JSON 备份接口，发布备份包含完整数据库。OneDrive 可恢复记录及已归档原件，但本机 last_sync 不证明云端上传完成。发布失败须报告具体阶段；不要把失败之后未执行的 push/deploy 宣称完成。恢复旧版本先停服务并检查兼容性，不覆盖正在写入的 SQLite；中断任务只显式重试，不自动重复模型调用。
+
+投资回报修订还需：在配置的Windows主机运行真实Excel集成，检查进入/退出持股与公司/投资人回收分离、稀释/分红/追加现金流、MOC和实际日期XIRR；用合成资料验证项目Excel/PDF只读、来源变化拒绝、缺项一组追问、结果自动计算/保存、原文件不变及停止。CI上的主机依赖跳过不等于验证了Excel。

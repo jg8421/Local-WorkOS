@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const METHODS = [
+    ['investor_return', '投资回报 · MOC / IRR', '从项目资料提取退出年数据，用 Excel 测算我们的投资回报。'],
     ['net_income', '净利润 × P/E', '股权价值；要求规范化净利润、期间、币种/单位与可比倍数。'],
     ['ps', 'P/S（股权价值）', '收入 × P/S；净债务可用于补充企业价值桥。'],
     ['dcf', 'DCF / FCFF', '逐年 EBIT、税、D&A、CapEx、ΔNWC、WACC、终值方法与净债务。'],
@@ -10,13 +11,15 @@
   const LABELS = {currency:'币种',unit:'金额单位',period:'期间',net_income:'净利润',pe_multiple:'P/E',diluted_shares:'稀释后股数',revenue:'收入',ps_multiple:'P/S',net_debt:'净债务',valuation_date:'估值日',wacc:'WACC',discount_timing:'折现时点',terminal_method:'终值方法',terminal_growth:'永续增长率',terminal_multiple:'终值倍数',minority_interest:'少数股东权益',entry_date:'进入日',exit_date:'退出日',entry_ev:'进入企业价值',entry_debt:'初始债务',entry_fees:'进入费用',minimum_cash:'最低现金',initial_cash:'初始现金',seller_rollover:'卖方滚存',exit_fees:'退出费用',exit_multiple:'退出倍数',tax_rate:'税率',interest_rate:'利率',mandatory_amortization:'强制偿还',cash_sweep_pct:'超额现金偿债比例',forecasts:'年度预测',year:'期间',ebit:'EBIT',ebitda:'EBITDA',ebit_margin:'EBIT率',da:'D&A',capex:'资本开支',delta_nwc:'营运资本变动'};
   const PERCENT = new Set(['wacc','terminal_growth','tax_rate','interest_rate','cash_sweep_pct','ebit_margin']);
   const PROMPTS = {
+    investor_return: '帮我算投资MOC和IRR。进入投后股权估值8亿美元，投资4000万美元，2027年12月31日交割，持有4年后退出；用退出年净利润1.2亿美元和15倍P/E，IPO稀释20%。请结合关联项目资料核对。',
     net_income: '按净利润×P/E估值。请说明币种/单位、净利润期间、规范化净利润、P/E倍数；如需每股价值，请提供稀释后股数。未提及的值不要猜。',
     ps: '按股权P/S估值。请说明币种/单位、收入期间、收入、P/S倍数；如需EV桥，请提供净债务。未提及的值不要猜。',
     dcf: '按FCFF DCF。请提供币种/单位、估值日、折现时点、WACC、终值方法及终值假设、净债务、少数股东权益；逐年列出EBIT或收入+EBIT率、D&A、CapEx、ΔNWC和税率。未提及的值不要猜。',
     lbo: '按LBO股权回报。请提供币种/单位、进入/退出日期、进入EV/债务/交易费用/最低现金/初始现金/卖方滚存、退出费用/退出倍数；逐年列出EBITDA、D&A、CapEx、ΔNWC、税率、利率、强制摊还及cash sweep比例。未提及的交易条款不要猜。'
   };
   function render({state, boot, helpers:h}) {
-    const method = state.valuationMethod || 'net_income';
+    const method = state.valuationMethod || 'investor_return';
+    if(method==='investor_return')return renderInvestor(state,h);
     const methodOptions = METHODS.map(item => '<option value="' + h.esc(item[0]) + '"' + (item[0] === method ? ' selected' : '') + '>' + h.esc(item[1]) + '</option>').join('');
     const modelOptions = h.unifiedModelOptions('valuation');
     const proposal = state.valuationProposal, clarification = h.clarification('valuation');
@@ -35,17 +38,45 @@
       '<div class="stack"><section class="panel question-panel"><div class="row wrap between"><div class="field"><label for="valuation-method">估值方法</label><select id="valuation-method">' + methodOptions + '</select></div><div class="field"><label for="valuation-project">关联项目</label><select id="valuation-project">' + h.projectOptions(state.valuationProjectId || '') + '</select></div>' +
       ('<div class="field"><label for="valuation-model">假设解析模型</label><select id="valuation-model" class="model-picker" data-model-picker="valuation" ' + (state.valuationPending ? 'disabled' : '') + '>' + modelOptions + '</select></div>') + '</div>' + h.renderConversation('valuation') + h.renderClarification('valuation') + '<p class="mt-12">' + h.esc(METHODS.find(x => x[0] === method)?.[2] || '') + '</p><label for="valuation-text">' + (clarification?'补充说明':'说说你想计算什么 / 继续修订') + '</label><textarea id="valuation-text" rows="6" maxlength="12000" placeholder="' + h.esc(clarification?'直接回答上面的问题即可，可以用自己的话说明。':'例如：净利润1.2亿，用8倍估值；帮我看看还缺哪些条件。') + '">' + h.esc(h.composerValue('valuation',state.valuationText || '')) + '</textarea><div class="mt-12">' + selectedModelBanner + '</div><p class="inline-note">继续对话时带入当前假设与本对话已完成的轮次；不自动发送项目资料或个人记忆。</p><div class="row wrap mt-12"><button type="button" class="button small soft" data-action="valuation-template">填入本方法假设提纲</button><button type="button" class="button primary" data-action="valuation-parse" ' + (state.valuationPending || !h.modelAvailable('valuation') ? 'disabled' : '') + '>' + (state.valuationPending ? '正在解析…' : clarification ? '补充后继续' : '用所选模型整理假设') + '</button>' + h.aiStopButton('valuation') + '</div>' + h.aiProgressRegion('valuation') + (state.valuationError ? '<div class="mt-12">' + h.banner('暂时未收到回复', state.valuationError, 'amber', 'warning') + (state.valuationErrorDetails?'<details class="mt-12"><summary>查看连接说明</summary><p class="small">'+h.esc(state.valuationErrorDetails)+'</p></details>':'') + '</div>' : '') + '</section>' + review + result + (state.valuationResult ? renderScenarios(state, h) : '') + '</div>';
   }
+  function renderInvestor(state,h){
+    const proposal=state.valuationProposal, pending=state.valuationPending, c=h.clarification('valuation');
+    const options=METHODS.map(x=>'<option value="'+x[0]+'"'+(x[0]===state.valuationMethod?' selected':'')+'>'+h.esc(x[1])+'</option>').join('');
+    let details='';
+    if(proposal){
+      const sources=(proposal.sources||[]).map(s=>'<li>'+h.esc('['+s.id+'] '+s.name)+(s.truncated?'（部分读取）':'')+'</li>').join('');
+      const origin=proposal.assumptions?.assumption_sources||{};
+      details='<details class="panel mt-18 valuation-review"><summary>查看条件与资料来源 / 高级编辑</summary>'+
+        '<p class="small mt-12">'+h.esc(state.valuationResult?.warning||'已有条件会随对话保留；在上方说要修改什么即可。')+'</p>'+
+        (sources?'<ul>'+sources+'</ul>':'<p class="small">本轮未读取项目文件，使用你明确提供的条件。</p>')+
+        (Object.keys(origin).length?'<pre class="small">'+h.esc(JSON.stringify(origin,null,2))+'</pre>':'')+
+        '<p class="small">'+h.esc((proposal.source_notes||[]).join('；'))+'</p>'+
+        '<textarea id="valuation-json" class="editor-body mt-12" rows="10" maxlength="200000" spellcheck="false">'+h.esc(state.valuationJson||'{}')+'</textarea>'+
+        '<button type="button" class="button soft mt-12" data-action="valuation-calculate" '+(pending?'disabled':'')+'>按编辑后的条件重算</button></details>';
+    }
+    const error=state.valuationError?'<p class="mt-12" role="alert">'+h.esc(state.valuationError)+'</p>':'';
+    return h.heading('投资回报与估值','INVESTOR RETURNS','说清交易安排，关联项目取数，用 Excel 计算 MOC 和 IRR。')+
+      '<section class="panel question-panel"><div class="row wrap between">'+
+      '<div class="field"><label for="valuation-method">测算目标</label><select id="valuation-method">'+options+'</select></div>'+
+      '<div class="field"><label for="valuation-project">关联项目</label><select id="valuation-project">'+h.projectOptions(state.valuationProjectId||'')+'</select></div>'+
+      '<div class="field"><label for="valuation-model">AI 模型</label><select id="valuation-model" class="model-picker" data-model-picker="valuation" '+(pending?'disabled':'')+'>'+h.unifiedModelOptions('valuation')+'</select></div></div>'+
+      '<details class="small mt-12"><summary>模型连接状态</summary>'+h.modelStatus('valuation')+'</details>'+h.renderConversation('valuation')+h.renderClarification('valuation')+
+      '<label for="valuation-text">'+(c?'补充说明':'测算要求 / 继续修订')+'</label><textarea id="valuation-text" rows="4" maxlength="12000" placeholder="例如：投后估值8亿美元，投4000万美元，交割后4年退出，用项目预测利润、15倍P/E，IPO稀释20%。Enter发送，Shift+Enter换行。">'+h.esc(h.composerValue('valuation',state.valuationText||''))+'</textarea>'+
+      '<label class="small mt-12"><input id="valuation-use-sources" type="checkbox" '+(state.valuationUseSources!==false?'checked':'')+' '+(pending?'disabled':'')+'> 读取当前项目资料及已关联文件夹中的 Excel/PDF</label>'+
+      '<div class="row wrap mt-12"><button type="button" class="button primary" data-action="valuation-parse" '+(pending||!h.modelAvailable('valuation')?'disabled':'')+'>'+(pending?'正在测算…':c?'补充后测算':'用 Excel 测算 / 修订')+'</button>'+h.aiStopButton('valuation')+'</div>'+h.aiProgressRegion('valuation')+error+'</section>'+
+      (state.valuationResult?renderResult(state.valuationResult,h)+(h.renderArchiveReceipt?h.renderArchiveReceipt(state.valuationArchive):''):'')+details+
+      (state.valuationResult&&presetScenarios('investor_return',state.valuationAssumptions).length?renderScenarios(state,h):'');
+  }
   function renderResult(result, h) {
     const method = result.method;
-    const metrics = method === 'lbo' ? [['Sponsor股权IRR', h.percent(result.irr)], ['MOIC', h.number(result.moic) + '×'], ['Sponsor出资', h.number(result.entry_sponsor_equity) + ' ' + result.unit], ['Sponsor退出回收', h.number(result.sponsor_proceeds) + ' ' + result.unit], ['Sponsor持股', h.percent(result.sponsor_ownership)], ['卖方退出回收', h.number(result.seller_proceeds) + ' ' + result.unit]] : method === 'dcf' ? [['企业价值', h.number(result.enterprise_value) + ' ' + result.unit], ['股权价值', h.number(result.equity_value) + ' ' + result.unit], ['终值现值占比', result.terminal_value_share == null ? '—' : h.percent(result.terminal_value_share)], ['WACC', h.percent(result.wacc)]] : [['股权价值', h.number(result.equity_value) + ' ' + result.unit], ['每股价值', result.implied_value_per_share == null ? '—' : h.number(result.implied_value_per_share)], [method === 'net_income' ? 'P/E' : 'P/S', h.number(method === 'net_income' ? result.pe_multiple : result.ps_multiple) + '×'], ['期间', h.esc(result.period || '—')]];
-    let body = '<section class="panel valuation-result"><div class="row between"><h2>' + h.esc(result.method_label || '估值结果') + '</h2><span class="badge green">本地计算</span></div><div class="finance-stats">' + metrics.map(x => '<div><span>' + h.esc(x[0]) + '</span><b>' + h.esc(x[1]) + '</b></div>').join('') + '</div>';
+    const metrics = method === 'investor_return' ? [['MOC / MOIC',h.number(result.moic)+'×'],['IRR',result.irr==null?'无有限XIRR解':h.percent(result.irr)],['累计投入',h.number(result.total_invested)+' '+result.currency+' '+result.unit],['累计回收',h.number(result.total_received)+' '+result.currency+' '+result.unit],['退出持股',result.exit_ownership==null?'按现金流表':h.percent(result.exit_ownership)],['退出日期',result.exit_date]] : method === 'lbo' ? [['Sponsor股权IRR', h.percent(result.irr)], ['MOIC', h.number(result.moic) + '×'], ['Sponsor出资', h.number(result.entry_sponsor_equity) + ' ' + result.unit], ['Sponsor退出回收', h.number(result.sponsor_proceeds) + ' ' + result.unit], ['Sponsor持股', h.percent(result.sponsor_ownership)], ['卖方退出回收', h.number(result.seller_proceeds) + ' ' + result.unit]] : method === 'dcf' ? [['企业价值', h.number(result.enterprise_value) + ' ' + result.unit], ['股权价值', h.number(result.equity_value) + ' ' + result.unit], ['终值现值占比', result.terminal_value_share == null ? '—' : h.percent(result.terminal_value_share)], ['WACC', h.percent(result.wacc)]] : [['股权价值', h.number(result.equity_value) + ' ' + result.unit], ['每股价值', result.implied_value_per_share == null ? '—' : h.number(result.implied_value_per_share)], [method === 'net_income' ? 'P/E' : 'P/S', h.number(method === 'net_income' ? result.pe_multiple : result.ps_multiple) + '×'], ['期间', h.esc(result.period || '—')]];
+    let body = '<section class="panel valuation-result"><div class="row between"><h2>' + h.esc(result.method_label || '估值结果') + '</h2><span class="badge green">' + h.esc(result.excel_verified?'Excel 已计算':'本地计算') + '</span></div><div class="finance-stats">' + metrics.map(x => '<div><span>' + h.esc(x[0]) + '</span><b>' + h.esc(x[1]) + '</b></div>').join('') + '</div>';
     const yearlyRows = result.forecast || result.rows; if (Array.isArray(yearlyRows)) body += '<div class="table-scroll mt-18"><table><thead><tr><th>期间</th><th>EBIT / EBITDA</th><th>税</th><th>CapEx</th><th>ΔNWC</th><th>FCFF / 期末债务</th></tr></thead><tbody>' + yearlyRows.map(row => '<tr><td>' + h.esc(row.year) + '</td><td>' + h.number(row.ebit ?? row.ebitda) + '</td><td>' + h.number(row.tax ?? 0) + '</td><td>' + h.number(row.capex ?? 0) + '</td><td>' + h.number(row.delta_nwc ?? 0) + '</td><td>' + h.number(row.fcff ?? row.ending_debt) + '</td></tr>').join('') + '</tbody></table></div>';
     if (result.sensitivity) body += '<div class="table-scroll mt-18"><table class="sensitivity-table"><thead><tr><th>' + h.esc(result.sensitivity.row_label) + ' / ' + h.esc(result.sensitivity.column_label) + '</th>' + result.sensitivity.columns.map(v => '<th>' + h.esc(result.sensitivity.column_label === 'Exit Multiple' ? h.number(v) + '×' : h.percent(v)) + '</th>').join('') + '</tr></thead><tbody>' + result.sensitivity.rows.map((v,i) => '<tr><th>' + h.esc(h.percent(v)) + '</th>' + (result.sensitivity.values[i] || []).map(x => '<td>' + h.esc(x == null ? '—' : result.method === 'lbo' ? h.percent(x) : h.number(x)) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
-    body += '<div class="mt-18">' + h.banner('公式与限制', result.formula + (result.warning ? ' ' + result.warning : ''), 'amber', 'info') + '</div><div class="row mt-18"><button type="button" class="button soft" data-action="valuation-save">保存为项目模型记录</button><button type="button" class="button primary" data-action="valuation-export-xlsx">下载 Excel 模型</button></div></section>';
+    body += (method==='investor_return'?'<details class="mt-18"><summary>现金流与计算口径</summary><p class="small">'+h.esc(result.formula)+' '+h.esc(result.warning||'')+'</p><table><thead><tr><th>日期</th><th>现金流</th><th>事项</th></tr></thead><tbody>'+(result.cash_flows||[]).map(row=>'<tr><td>'+h.esc(row.date)+'</td><td>'+h.number(row.amount)+'</td><td>'+h.esc(row.label)+'</td></tr>').join('')+'</tbody></table></details>':'<div class="mt-18">' + h.banner('公式与限制', result.formula + (result.warning ? ' ' + result.warning : ''), 'amber', 'info') + '</div>') + '<div class="row mt-18"><button type="button" class="button soft" data-action="valuation-save">保存为项目模型记录</button><button type="button" class="button primary" data-action="valuation-export-xlsx">下载 Excel 模型</button></div></section>';
     return body;
   }
   function presetScenarios(method, assumptions) {
-    const key = method === 'net_income' ? 'pe_multiple' : method === 'ps' ? 'ps_multiple' : method === 'lbo' ? 'exit_multiple' : assumptions?.terminal_method === 'exit_multiple' ? 'terminal_multiple' : 'wacc';
+    const key = method==='investor_return'?'exit_pe_multiple':method === 'net_income' ? 'pe_multiple' : method === 'ps' ? 'ps_multiple' : method === 'lbo' ? 'exit_multiple' : assumptions?.terminal_method === 'exit_multiple' ? 'terminal_multiple' : 'wacc';
     const value = assumptions?.[key];
     if (typeof value !== 'number' || !Number.isFinite(value)) return [];
     const scaled = factor => Number((value * factor).toPrecision(12));
@@ -55,11 +86,11 @@
     const comparison = state.valuationScenarioResult;
     let rows = '';
     if (comparison?.baseline && Array.isArray(comparison.scenarios)) {
-      rows = '<div class="table-scroll mt-18"><table><thead><tr><th>场景</th><th>' + (comparison.method === 'lbo' ? 'Sponsor退出回收' : '股权价值') + '</th><th>' + (comparison.method === 'lbo' ? '退出企业价值' : '企业价值') + '</th><th>IRR</th><th>MOIC</th><th>资金缺口</th></tr></thead><tbody>' +
+      rows = '<div class="table-scroll mt-18"><table><thead><tr><th>场景</th><th>' + (['lbo','investor_return'].includes(comparison.method) ? 'Sponsor退出回收' : '股权价值') + '</th><th>' + (['lbo','investor_return'].includes(comparison.method) ? '退出企业价值' : '企业价值') + '</th><th>IRR</th><th>MOIC</th><th>资金缺口</th></tr></thead><tbody>' +
         [{name:'基准', result:comparison.baseline}, ...comparison.scenarios].map(item => {
           const value = item.result || {};
           const amount = n => n == null ? '—' : h.number(n) + ' ' + h.esc(comparison.unit || '');
-          return '<tr><td>' + h.esc(item.name) + '</td><td>' + amount(value.equity_value ?? value.sponsor_proceeds) + '</td><td>' + amount(value.enterprise_value ?? value.exit_ev) + '</td><td>' + (value.irr == null ? '—' : h.percent(value.irr)) + '</td><td>' + (value.moic == null ? '—' : h.number(value.moic) + '×') + '</td><td>' + amount(value.funding_gap_total) + '</td></tr>';
+          return '<tr><td>' + h.esc(item.name) + '</td><td>' + amount(value.total_received ?? value.equity_value ?? value.sponsor_proceeds) + '</td><td>' + amount(value.exit_equity_value ?? value.enterprise_value ?? value.exit_ev) + '</td><td>' + (value.irr == null ? '—' : h.percent(value.irr)) + '</td><td>' + (value.moic == null ? '—' : h.number(value.moic) + '×') + '</td><td>' + amount(value.funding_gap_total) + '</td></tr>';
         }).join('') + '</tbody></table></div><p class="tiny muted mt-12">' + h.esc(comparison.warning || '') + '</p>';
     }
     const disabled = state.valuationPending ? 'disabled' : '';

@@ -84,7 +84,7 @@
   const views = new Map();
   function freshView() {
     const defaultModel={mode:'deepseek',id:'deepseek-v4.1-flash'},ask=loadModelChoice('ask',defaultModel),agent=loadModelChoice('agent',defaultModel),meeting=loadModelChoice('meeting',defaultModel),valuation=loadModelChoice('valuation',defaultModel),start=loadModelChoice('start',defaultModel);
-    return { page: 'overview', startMessage: '', startProject: '', startPurpose: '', startMode:start.mode,startModel:start.id,startSourceIds: new Set(), startBusy: false, workflowKey: 'brief', workflowMessage: '', workflowBusy: false, workflowError: '', workflowResults: [], projectStage: '全部', projectQuery: '', projectId: '', libraryQuery: '', libraryGroup: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceGroup: '', sourceQuery: '', selectedSources: new Set(), answers: [], researchIntent: 'ask', askMode:ask.mode,dshModel:ask.mode==='dsh'?ask.id:loadDshModel(),localModel:ask.mode==='dsh'?loadLocalModel():ask.id,agentMode:agent.mode,agentModel:agent.id,agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentResultProject: null, agentProjectScope: true, agentHistoryByScope: new Map(), question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), meetingTranscriptDraft: '', meetingMode:meeting.mode,meetingModel:meeting.id,meetingAiBusy: false, meetingSaveTimer: null, meetingSaveState: '', memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'net_income', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '',valuationMode:valuation.mode,valuationModel:valuation.id };
+    return { page: 'overview', startMessage: '', startProject: '', startPurpose: '', startMode:start.mode,startModel:start.id,startSourceIds: new Set(), startBusy: false, workflowKey: 'brief', workflowMessage: '', workflowBusy: false, workflowError: '', workflowResults: [], projectStage: '全部', projectQuery: '', projectId: '', libraryQuery: '', libraryGroup: '', taskProject: '', taskQuery: '', taskPriority: '', highlightTask: '', researchProject: '', sourceGroup: '', sourceQuery: '', selectedSources: new Set(), answers: [], researchIntent: 'ask', askMode:ask.mode,dshModel:ask.mode==='dsh'?ask.id:loadDshModel(),localModel:ask.mode==='dsh'?loadLocalModel():ask.id,agentMode:agent.mode,agentModel:agent.id,agentOpen: false, agentMessage: '', agentBusy: false, agentSteps: [], agentAnswer: '', agentResultProject: null, agentProjectScope: true, agentHistoryByScope: new Map(), question: '', asking: false, meetingProject: '', meetingId: '', drafts: new Map(), meetingTranscriptDraft: '', meetingMode:meeting.mode,meetingModel:meeting.id,meetingAiBusy: false, meetingSaveTimer: null, meetingSaveState: '', memoryCategory: '全部', memoryQuery: '', deliverableId: '', deliverableDirty: false, finance: loadFinance(), financeResult: null, financePending: false, financeError: '', financeAutoStarted: false, financeDirty: false, valuationMethod: 'investor_return', valuationText: '', valuationProposal: null, valuationJson: '', valuationResult: null, valuationPending: false, valuationError: '', valuationProjectId: '',valuationMode:valuation.mode,valuationModel:valuation.id };
   }
   function view() {
     if (!views.has(app.workspace)) {
@@ -243,7 +243,7 @@
   function updateAiProgressRegions(){updateAiControls();$$('[data-ai-progress]').forEach(node=>replaceProgressRegion(node,renderAiProgress(node.dataset.aiProgress)));}
   function conversationScope(kind,state=view()) {
     const meeting=record('meetings',state.meetingId);
-    const scope=kind==='start'?{project_id:String(state.startProject||''),purpose:'plan',source_ids:[...state.startSourceIds].map(String).filter(id=>!state.startProject||String(record('documents',id)?.project_id||'')===String(state.startProject)).sort(),metadata:{}}:kind==='meeting'?{project_id:String(meeting?.project_id||''),purpose:'meeting',source_ids:[],metadata:{meeting_id:String(state.meetingId||'')}}:kind==='valuation'?{project_id:String(state.valuationProjectId||''),purpose:'valuation',source_ids:[],metadata:{method:state.valuationMethod}}:kind==='agent'?{project_id:String(state.agentProjectScope?state.researchProject||'':''),purpose:'actions',source_ids:[],metadata:{}}:{project_id:String(state.researchProject||''),purpose:kind==='workflow'?'workflow':'ask',source_ids:[...state.selectedSources].map(String).sort(),metadata:kind==='workflow'?{workflow_key:state.workflowKey}:{}};
+    const scope=kind==='start'?{project_id:String(state.startProject||''),purpose:'plan',source_ids:[...state.startSourceIds].map(String).filter(id=>!state.startProject||String(record('documents',id)?.project_id||'')===String(state.startProject)).sort(),metadata:{}}:kind==='meeting'?{project_id:String(meeting?.project_id||''),purpose:'meeting',source_ids:[],metadata:{meeting_id:String(state.meetingId||'')}}:kind==='valuation'?{project_id:String(state.valuationProjectId||''),purpose:'valuation',source_ids:state.valuationMethod==='investor_return'&&state.valuationUseSources!==false&&state.valuationProjectId?list('documents').filter(d=>String(d.project_id)===String(state.valuationProjectId)&&d.kind!=='memory').slice(0,80).map(d=>String(d.id)).sort():[],metadata:{method:state.valuationMethod}}:kind==='agent'?{project_id:String(state.agentProjectScope?state.researchProject||'':''),purpose:'actions',source_ids:[],metadata:{}}:{project_id:String(state.researchProject||''),purpose:kind==='workflow'?'workflow':'ask',source_ids:[...state.selectedSources].map(String).sort(),metadata:kind==='workflow'?{workflow_key:state.workflowKey}:{}};
     return {...scope,key:JSON.stringify([scope.project_id,scope.purpose,scope.source_ids,scope.metadata])};
   }
   const clarificationKey=(kind,state=view())=>`${kind}:${conversationScope(kind,state).key}`;
@@ -311,7 +311,7 @@
     const response=await api(`/conversations/${encodeURIComponent(id)}`),conversation=response.conversation;if(view()!==state||conversationScope(kind).key!==scope.key)return;
     if(!conversation||!conversationMatches(conversation,scope)){notify('这段对话的项目、材料或用途不同，请先核对当前范围。',true);return;}
     state.conversations.set(scope.key,conversation);
-    if(kind==='workflow')state.workflowRequest=null;if(kind==='valuation'&&!state.valuationJson.trim()){const previous=[...(conversation.turns||[])].reverse().find(turn=>['completed','needs_input'].includes(turn.status)&&turn.output_snapshot?.assumptions);if(previous){state.valuationJson=JSON.stringify(previous.output_snapshot.assumptions,null,2);state.valuationProposal=previous.output_snapshot;state.valuationResult=null;}}
+    if(kind==='workflow')state.workflowRequest=null;if(kind==='valuation'&&!state.valuationJson.trim()){const previous=[...(conversation.turns||[])].reverse().find(turn=>['completed','needs_input'].includes(turn.status)&&turn.output_snapshot?.assumptions);if(previous){state.valuationJson=JSON.stringify(previous.output_snapshot.assumptions,null,2);state.valuationProposal=previous.output_snapshot;state.valuationResult=previous.output_snapshot.calculation||null;state.valuationAssumptions=previous.output_snapshot.assumptions;}}
     const turn=[...(conversation.turns||[])].reverse().find(item=>['completed','needs_input'].includes(item.status));
     if(turn?.output_snapshot?.status==='needs_input'){const draft=composerDraft(kind,state);needsInput(kind,turn.output_snapshot,turn.user_message||'');if(draft&&draft!==turn.user_message)clarification(kind,state).draft=draft;}
     if(kind==='workflow'){const completed=[...(conversation.turns||[])].reverse().find(item=>item.status==='completed');state.workflowRevisionId=completed?.current_artifact?.id||conversation.metadata?.current_artifact?.id||'';}
@@ -691,7 +691,7 @@
       if(route==='finance'||route==='model'){
         if(state.valuationPending){notify('当前模型还在处理，请稍后再准备新的模型。',true);return;}
         setModelSelection('valuation',modelSelectionId(modelSelection('start')));state.valuationText=question;state.valuationProjectId=projectId;state.valuationProposal=null;state.valuationJson='';state.valuationResult=null;state.valuationError='';state.valuationScenarioResult=null;state.valuationScenariosJson='';
-        state.valuationMethod=['net_income','ps','dcf','lbo'].includes(plan.method)?plan.method:/\blbo\b|杠杆收购/i.test(question)?'lbo':/\bdcf\b|现金流折现/i.test(question)?'dcf':/p\s*\/\s*s|市销率/i.test(question)?'ps':'net_income';
+        state.valuationMethod=['investor_return','net_income','ps','dcf','lbo'].includes(plan.method)?plan.method:/\b(?:MOC|MOIC|IRR)\b|投资回报|回报倍数/i.test(question)&& !/\blbo\b|杠杆收购/i.test(question)?'investor_return':/\blbo\b|杠杆收购/i.test(question)?'lbo':/\bdcf\b|现金流折现/i.test(question)?'dcf':/p\s*\/\s*s|市销率/i.test(question)?'ps':'net_income';
         state.clarifications.delete(clarificationKey('valuation',state));
         if(await navigate('finance')){assertAiRun(run);notify('已带入建模需求。确认方法和假设后即可计算并保存模型。');}return;
       }
@@ -1351,7 +1351,9 @@
 
   async function parseValuationAssumptions() {
     const state = view(); if (state.valuationPending) return;
-    const text = clarifiedTask('valuation',$('#valuation-text')?.value);if(text)state.valuationText = text;
+    const typed=String($('#valuation-text')?.value||'').trim();
+    if(/\b(?:MOC|MOIC|IRR|XIRR)\b|投资回报|回报倍数/i.test(typed)&&state.valuationMethod!=='investor_return'&&!/\blbo\b|杠杆收购/i.test(typed)){state.valuationMethod='investor_return';state.valuationJson='';state.valuationProposal=null;}
+    const text=state.valuationMethod==='investor_return'?typed:clarifiedTask('valuation',typed);if(text)state.valuationText=text;
     if (!text) { prerequisite('valuation',state.valuationText,'先说说你想算什么，有哪些已知条件？',[{id:'requirements',label:'直接描述金额、倍数或交易安排即可。',hint:'不必填写固定格式；缺少的口径会逐步确认。'}]);return; }
     if(!requireModel('valuation'))return;
     const {mode,id:modelId}=modelSelection('valuation');
@@ -1359,11 +1361,11 @@
     try {
       const conversationId=await ensureConversation('valuation',run);
       let priorAssumptions;try{priorAssumptions=JSON.parse(state.valuationJson||'{}');}catch{priorAssumptions=state.valuationProposal?.assumptions||{};}
-      const result = await aiRequest(run,'/model/parse-assumptions',{ method: state.valuationMethod, text,mode,provider:mode,model_id:modelId,allow_external: true,project_id:state.valuationProjectId||'',conversation_id:conversationId,...(state.valuationJson.trim()?{prior_assumptions:priorAssumptions}:{}) });
+      const result = await aiRequest(run,'/model/parse-assumptions',{ method: state.valuationMethod, text,mode,provider:mode,model_id:modelId,allow_external: true,project_id:state.valuationProjectId||'',document_ids:run.conversationScope.source_ids,use_project_sources:state.valuationMethod==='investor_return'&&state.valuationUseSources!==false,auto_save:state.valuationMethod==='investor_return'&&!!state.valuationProjectId,conversation_id:conversationId,...(state.valuationJson.trim()?{prior_assumptions:priorAssumptions}:{}) });
       acceptConversation(run,result);
-      if(conversationScope('valuation').key===run.conversationScope.key){state.valuationProposal = result; state.valuationJson = JSON.stringify(result.assumptions || {}, null, 2);}
+      if(conversationScope('valuation').key===run.conversationScope.key){state.valuationProposal = result; state.valuationJson = JSON.stringify(result.assumptions || {}, null, 2);if(result.calculation){state.valuationResult=result.calculation;state.valuationAssumptions=result.assumptions;state.valuationArchive=result.archive;state.valuationSavedId=result.deliverable_id||'';}if(result.status==='excel_unavailable')state.valuationError=result.message;}
       if(needsInput('valuation',result,text,{run}))return;
-      state.clarifications.delete(clarificationKey('valuation',state));
+      state.clarifications.delete(clarificationKey('valuation',state));if(result.saved)await refreshData();
     } catch (error) { if (state.aiKinds.get('valuation')===run&&error.name !== 'StaleRequestError'&&error.name!=='AbortError'){state.valuationError = friendlyAiError(error);state.valuationErrorDetails=error.message;} }
     finally { if(finishAiRun(run)&&view() === state && app.page === 'finance')render(); }
   }
@@ -1373,10 +1375,10 @@
     let assumptions;
     try { assumptions = JSON.parse(text || '{}'); }
     catch { prerequisite('valuation',state.valuationText,'这组高级假设暂时无法读取。可以在上方用自然语言重新说明要调整的条件。',[{id:'assumptions',label:'说说要调整哪项金额、口径或预测。',hint:'已提取的信息会保留，不需要重新填写固定格式。'}]);return; }
-    state.valuationJson = text; state.valuationPending = true; state.valuationError = ''; state.valuationResult = null; render();
-    try { const result=await api('/model/valuation', { body: { method: state.valuationMethod, assumptions } });if(needsInput('valuation',result,state.valuationText||'计算当前模型')){state.valuationProposal={...state.valuationProposal,...result};return;}state.valuationResult=result;state.valuationAssumptions=assumptions;state.clarifications.delete(clarificationKey('valuation',state)); }
+    state.valuationJson = text; state.valuationError = ''; state.valuationResult = null;const run=beginAiRun('valuation',state);render();
+    try { const result=await aiRequest(run,'/model/valuation', { method: state.valuationMethod, assumptions });if(result.status==='excel_unavailable'){state.valuationError=result.message;return;}if(needsInput('valuation',result,state.valuationText||'计算当前模型')){state.valuationProposal={...state.valuationProposal,...result};return;}state.valuationResult=result;state.valuationAssumptions=assumptions;state.clarifications.delete(clarificationKey('valuation',state)); }
     catch (error) { if (error.name !== 'StaleRequestError') state.valuationError = error.message; }
-    finally { state.valuationPending = false; if (view() === state && app.page === 'finance') render(); }
+    finally { if(finishAiRun(run)&&view() === state && app.page === 'finance') render(); }
   }
   async function exportValuationXlsx(button){
     const state=view();if(!state.valuationResult||!state.valuationAssumptions){notify('请先计算估值结果。',true);return;}
@@ -1386,7 +1388,7 @@
   async function saveValuation() {
     const state = view(); if (!state.valuationResult || !state.valuationAssumptions) return;
     const result = state.valuationResult; const assumptions = state.valuationAssumptions;
-    const body = ['# '+result.method_label, '', '## 假设（用户确认）', 'JSON:', JSON.stringify(assumptions, null, 2), '', '## 计算结果', 'JSON:', JSON.stringify(result, null, 2), '', '> 模型计算为确定性输出；源假设需回到项目资料核实。'].join('\n');
+    const body = result.method==='investor_return'?['# 投资回报测算','',`MOC / MOIC：${number(result.moic)}×；IRR：${result.irr==null?'无有限XIRR解':percent(result.irr)}。`,`累计投入 ${number(result.total_invested)}，累计回收 ${number(result.total_received)}（${result.currency}/${result.unit}）。`,`交割 ${result.entry_date}；退出 ${result.exit_date}。`,'',result.formula,result.warning].join('\n'):['# '+result.method_label, '', '## 假设（用户确认）', 'JSON:', JSON.stringify(assumptions, null, 2), '', '## 计算结果', 'JSON:', JSON.stringify(result, null, 2), '', '> 模型计算为确定性输出；源假设需回到项目资料核实。'].join('\n');
     const title = result.method_label + ' · ' + today();
     await withBusy($('[data-action="valuation-save"]'), '正在保存…', async () => {
       const saved=await api('/deliverables', { body: { title, kind: '自定义', project_id: state.valuationProjectId || '', body, method:state.valuationMethod, assumptions, result } });
@@ -1417,9 +1419,9 @@
   async function calculateValuationScenarios(){
     const state=view();if(state.valuationPending||!state.valuationAssumptions)return;
     let scenarios;try{scenarios=JSON.parse($('#valuation-scenarios-json')?.value||state.valuationScenariosJson||'[]');}catch{notify('情景格式不正确，请检查后重试。',true);return;}
-    state.valuationScenariosJson=JSON.stringify(scenarios,null,2);state.valuationPending=true;state.valuationError='';state.valuationScenarioResult=null;render();
-    try{state.valuationScenarioResult=await api('/model/scenarios',{body:{method:state.valuationMethod,assumptions:state.valuationAssumptions,scenarios}});}catch(error){if(error.name!=='StaleRequestError')state.valuationError=error.message;}
-    finally{state.valuationPending=false;if(view()===state&&app.page==='finance')render();}
+    state.valuationScenariosJson=JSON.stringify(scenarios,null,2);state.valuationError='';state.valuationScenarioResult=null;const run=beginAiRun('valuation',state);render();
+    try{state.valuationScenarioResult=await aiRequest(run,'/model/scenarios',{method:state.valuationMethod,assumptions:state.valuationAssumptions,scenarios});}catch(error){if(error.name!=='StaleRequestError')state.valuationError=error.message;}
+    finally{if(finishAiRun(run)&&view()===state&&app.page==='finance')render();}
   }
   function renderDeliverables() {
     const state = view(); const items = [...list('deliverables')].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
@@ -1632,7 +1634,8 @@
     bindSubmit('ask-form', askQuestion); bindSubmit('meeting-summary-form', saveMeetingSummary); bindSubmit('meeting-actions-form', createMeetingTasks); bindSubmit('finance-form', calculateFinance); bindSubmit('ai-settings-form', saveAISettings);
     bindAiComposer('question-input','ask-form');
     bindSelect('valuation-method', value => { const state = view(); state.valuationMethod = value; state.valuationProposal = null; state.valuationJson = ''; state.valuationResult = null; state.valuationScenarioResult=null;state.valuationScenariosJson='';state.valuationError = '';state.conversations.delete(conversationScope('valuation').key);render(); });
-    bindSelect('valuation-project', value => { view().valuationProjectId = value;view().conversations.delete(conversationScope('valuation').key);render(); });
+    $('#valuation-use-sources')?.addEventListener('change',event=>{const state=view();state.valuationUseSources=event.target.checked;state.conversations.delete(conversationScope('valuation').key);render();});
+    bindSelect('valuation-project', value => { const state=view();if(state.valuationMethod==='investor_return'&&state.valuationProjectId!==value){state.valuationProposal=null;state.valuationJson='';state.valuationResult=null;state.valuationAssumptions=null;state.valuationArchive=null;state.valuationSavedId='';state.valuationScenarioResult=null;}view().valuationProjectId = value;view().conversations.delete(conversationScope('valuation').key);render(); });
     $('#meeting-transcript-input')?.addEventListener('input',event=>{const state=view();const text=event.target.value;state.meetingTranscriptDraft=text;const id=state.meetingId;state.meetingTranscriptDrafts.set(String(id),text);if(!id)return;clearTimeout(state.transcriptSaveTimer);const label=$('#meeting-save-state');if(label)label.textContent='正在保存原文…';state.transcriptSaveTimer=setTimeout(async()=>{try{await api('/meetings/'+encodeURIComponent(id),{method:'PATCH',body:{transcript:text}});await refreshData();const node=$('#meeting-save-state');if(node)node.textContent='逐字稿已保存在本机';}catch(error){notify('逐字稿保存失败：'+error.message,true);}},700);});
     const meetingDrop=$('[data-meeting-transcript-drop]');
     meetingDrop?.addEventListener('dragover',event=>{event.preventDefault();meetingDrop.classList.add('drag-over');});
