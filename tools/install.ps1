@@ -1,9 +1,14 @@
-param([string]$Python='')
+param([string]$Python='',[switch]$VersionOnly)
 $ErrorActionPreference='Stop'
 $source=Split-Path -Parent $PSScriptRoot
 if(-not $env:LOCALAPPDATA -or -not $env:APPDATA){throw 'Windows standard application-data locations are required.'}
-$destination=Join-Path $env:LOCALAPPDATA 'Programs\LocalWorkOS\1.9.1'
-$releaseVersion='1.9.1'
+# Read the application version without executing application code or requiring dependencies.
+# Use one value for the install directory and release metadata on every future release.
+$versionMatch=[regex]::Match((Get-Content -LiteralPath (Join-Path $source 'workos\__init__.py') -Raw),'(?m)^__version__\s*=\s*[''"](?<version>\d+\.\d+\.\d+)[''"]\s*$')
+if(-not $versionMatch.Success){throw 'Cannot read a valid application release version.'}
+$releaseVersion=$versionMatch.Groups['version'].Value
+if($VersionOnly){Write-Output $releaseVersion;return}
+$destination=Join-Path $env:LOCALAPPDATA ('Programs\LocalWorkOS\'+$releaseVersion)
 
 # Use the user's existing Python. Never install packages or touch other apps.
 $candidates=@()

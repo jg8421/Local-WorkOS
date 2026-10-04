@@ -2,13 +2,37 @@
 from contextlib import closing
 from pathlib import Path
 import json
+import os
 import sqlite3
+import subprocess
 import urllib.error
 from tempfile import TemporaryDirectory
 import unittest
 
 from tools.release_backup import backup
 from tools.release_verify import verify_anonymous_denial, verify_work_contracts
+
+
+class InstallerVersionTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows installer requires PowerShell')
+    def test_installer_follows_source_version_and_rejects_invalid_metadata(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tools').mkdir()
+            (root / 'workos').mkdir()
+            installer = root / 'tools' / 'install.ps1'
+            installer.write_bytes((Path(__file__).resolve().parents[1] / 'tools' / 'install.ps1').read_bytes())
+            source = root / 'workos' / '__init__.py'
+            for version in ('1.10.0', '42.3.1'):
+                source.write_text('__version__ = ' + repr(version) + '\nraise RuntimeError("must not execute")\n')
+                result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                                         '-File', str(installer), '-VersionOnly'], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), version)
+            source.write_text('__version__ = "../invalid"\n')
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                                     '-File', str(installer), '-VersionOnly'], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
 
 
 class ReleaseBackupTests(unittest.TestCase):
